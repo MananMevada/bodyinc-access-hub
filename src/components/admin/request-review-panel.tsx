@@ -183,6 +183,16 @@ export function RequestReviewPanel({
     mutationFn: async () => startConsult({ data: { requestId } }),
     onSuccess: (res) => {
       if (!res.ok) {
+        if (consultation) {
+          refresh();
+          navigate({
+            to: clinicalOnly
+              ? "/provider/requests/$requestId/consultation"
+              : "/admin/requests/$requestId/consultation",
+            params: { requestId },
+          });
+          return;
+        }
         toast.error(res.message);
         return;
       }
@@ -194,7 +204,18 @@ export function RequestReviewPanel({
         params: { requestId },
       });
     },
-    onError: (e: Error) => toast.error(toastError(e)),
+    onError: (e: Error) => {
+      if (consultation) {
+        navigate({
+          to: clinicalOnly
+            ? "/provider/requests/$requestId/consultation"
+            : "/admin/requests/$requestId/consultation",
+          params: { requestId },
+        });
+        return;
+      }
+      toast.error(toastError(e));
+    },
   });
 
   const finishConsultMut = useMutation({

@@ -1526,8 +1526,9 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
           await Promise.allSettled(
             uniqueClientIds.map(async (cid) => {
               try {
-                const res = await fetch(`https://api-bodyinc.quickblox.com/users/${cid}`, {
-                  headers: { Authorization: `Bearer ${reviewerSession.token}` },
+                const res = await fetch(`${qbConfig.apiUrl}/users/${cid}.json`, {
+                  headers: { "QB-Token": reviewerSession.token },
+                  cache: "no-store",
                 });
                 if (res.ok) {
                   const uJson: any = await res.json();

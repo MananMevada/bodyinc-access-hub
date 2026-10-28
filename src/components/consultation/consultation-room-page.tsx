@@ -642,6 +642,36 @@ export function ConsultationRoomPage({
 
       // WebRTC Call Listeners
       if (QB.webrtc) {
+        QB.webrtc.onCallListener = (session) => {
+          console.log("[QuickBlox] incoming onCallListener:", session);
+          currentSessionRef.current = session;
+          const isVideo = session.callType === QB.webrtc?.CallType.VIDEO;
+          playRingtone();
+          toast.info(isVideo ? "Incoming video call from patient…" : "Incoming audio call from patient…");
+          const mediaParams = {
+            audio: true,
+            video: isVideo ? true : false,
+            options: { muted: false, mirror: isVideo },
+          };
+          session.getUserMedia(mediaParams, (err, stream) => {
+            if (err) {
+              console.error("[QuickBlox] onCallListener getUserMedia error:", err);
+              session.reject({});
+              stopRingtone();
+              return;
+            }
+            localStreamRef.current = stream;
+            session.accept({});
+            stopRingtone();
+            setActiveCall({
+              session,
+              isVideo,
+              startTime: Date.now(),
+            });
+            setActiveMainTab("call");
+          });
+        };
+
         QB.webrtc.onRemoteStreamListener = (session, userId, stream) => {
           console.log("[QuickBlox] onRemoteStreamListener:", userId, stream);
           remoteStreamRef.current = stream;
