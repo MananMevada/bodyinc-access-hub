@@ -126,18 +126,6 @@ export function RequestReviewPanel({
   const [approveOpen, setApproveOpen] = useState(false);
   const [sendPharmacyOpen, setSendPharmacyOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
-  const [activeConsultation, setActiveConsultation] = useState<{
-    embedUrl: string;
-    externalUrl: string;
-  } | null>(null);
-  const [iframeLoading, setIframeLoading] = useState(true);
-  const consultCardRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (activeConsultation) {
-      consultCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [activeConsultation]);
 
   const [directions, setDirections] = useState("");
   const [approveNote, setApproveNote] = useState("");
@@ -736,22 +724,10 @@ export function RequestReviewPanel({
                   ) : (
                     <>
                       <Video className="mr-1.5 h-4 w-4" />
-                      {activeConsultation ? "Open consultation room" : "Join live consultation"}
+                      Join live consultation
                     </>
                   )}
                 </Button>
-                {activeConsultation ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setActiveConsultation(null)}
-                    className="h-10 px-2.5 text-[12px] font-medium text-[#8F4A33] hover:bg-[#F6E4DA]"
-                    title="Close inline consultation"
-                  >
-                    <X className="mr-1 h-3.5 w-3.5" /> Close
-                  </Button>
-                ) : null}
               </div>
             ) : canManage && canStartConsult ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -770,22 +746,10 @@ export function RequestReviewPanel({
                   ) : (
                     <>
                       <Video className="mr-1.5 h-4 w-4" />
-                      {activeConsultation ? "Open consultation room" : "Start consultation"}
+                      Start consultation
                     </>
                   )}
                 </Button>
-                {activeConsultation ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setActiveConsultation(null)}
-                    className="h-10 px-2.5 text-[12px] font-medium text-[#8F4A33] hover:bg-[#F6E4DA]"
-                    title="Close inline consultation"
-                  >
-                    <X className="mr-1 h-3.5 w-3.5" /> Close
-                  </Button>
-                ) : null}
               </div>
             ) : null}
             {canManage && request.session_id ? (
@@ -814,103 +778,6 @@ export function RequestReviewPanel({
           ) : null}
         </CardContent>
       </Card>
-
-      {/* Embedded Live Video Consultation Window */}
-      {activeConsultation ? (
-        <Card
-          ref={consultCardRef}
-          className={`${adminCard} overflow-hidden scroll-mt-6 border-[#6A9B9C]/40 shadow-sm ring-1 ring-[#6A9B9C]/20`}
-        >
-          <CardHeader className="flex flex-col gap-3 border-b border-[#D5DEDD] bg-[#F7F9F9] p-3.5 sm:px-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                </span>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[14px] font-semibold text-[#152A51]">
-                      Live Video Consultation {patient?.name ? `· ${patient.name}` : ""}
-                    </span>
-                    <Badge className="border-emerald-200 bg-emerald-100 text-[11px] font-semibold text-emerald-800 shadow-none hover:bg-emerald-100">
-                      Connected
-                    </Badge>
-                  </div>
-                  <p className="hidden text-[12px] text-[#3B4759]/70 sm:block">
-                    Live video room connected. Review order details above and clinical notes below.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <a
-                  href={activeConsultation.externalUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#D5DEDD] bg-white px-2.5 text-[12px] font-medium text-[#3B4759] hover:bg-[#F3F6F6]"
-                  title="Open consultation in full new tab"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">Open in New Tab</span>
-                </a>
-
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setIframeLoading(true);
-                    const current = activeConsultation.embedUrl.split("&_t=")[0];
-                    setActiveConsultation({
-                      ...activeConsultation,
-                      embedUrl: `${current}&_t=${Date.now()}`,
-                    });
-                  }}
-                  className="h-8 w-8 rounded-lg p-0 text-[#3B4759] hover:bg-[#F3F6F6]"
-                  title="Reload consultation"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${iframeLoading ? "animate-spin" : ""}`} />
-                  <span className="sr-only">Reload</span>
-                </Button>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setActiveConsultation(null)}
-                  className="h-8 gap-1.5 border-[#E7CFC3] bg-white px-2.5 text-[12px] font-medium text-[#8F4A33] hover:bg-[#F6E4DA]"
-                  title="Close consultation view"
-                >
-                  <X className="h-3.5 w-3.5" />
-                  <span>Close call</span>
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-
-          <CardContent className="p-0">
-            <div className="relative flex min-h-[540px] h-[65vh] max-h-[750px] w-full flex-col overflow-hidden bg-white">
-              {iframeLoading ? (
-                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/90 backdrop-blur-xs">
-                  <Loader2 className="h-8 w-8 animate-spin text-[#152A51]" />
-                  <p className="mt-3 text-[14px] font-medium text-[#152A51]">
-                    Loading QuickBlox consultation room…
-                  </p>
-                </div>
-              ) : null}
-              <iframe
-                src={activeConsultation.embedUrl}
-                title="Video Consultation"
-                className="h-full w-full flex-1 border-0"
-                allow="camera; microphone; display-capture; autoplay; clipboard-write; fullscreen;"
-                allowFullScreen
-                onLoad={() => setIframeLoading(false)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
 
       {!clinicalOnly && additional_payments.length > 0 ? (
         <Card className={adminCard}>

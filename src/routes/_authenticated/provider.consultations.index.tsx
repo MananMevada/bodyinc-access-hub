@@ -1,21 +1,13 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import { Search } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RefreshButton } from "@/components/admin/refresh-button";
-import {
-  closePendingTab,
-  ConsultationsTable,
-  openPendingTab,
-  sendTabToUrl,
-} from "@/components/consultations-table";
-import { listConsultations, openProviderInbox } from "@/lib/consultations.functions";
-import { adminBtnSecondary, adminInput, adminPageSubtitle, adminPageTitle } from "@/lib/admin-ui";
-import { toastError } from "@/lib/toast-message";
+import { ConsultationsTable } from "@/components/consultations-table";
+import { listConsultations } from "@/lib/consultations.functions";
+import { adminInput, adminPageSubtitle, adminPageTitle } from "@/lib/admin-ui";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { normalizeIdSearch } from "@/lib/format";
 
@@ -38,7 +30,6 @@ export const Route = createFileRoute("/_authenticated/provider/consultations/")(
 
 function ProviderConsultationsPage() {
   const list = useServerFn(listConsultations);
-  const inbox = useServerFn(openProviderInbox);
   const [search, setSearch] = useState("");
   const debounced = useDebouncedValue(search);
   const searchTerm = normalizeIdSearch(debounced);
@@ -47,22 +38,6 @@ function ProviderConsultationsPage() {
     queryKey: ["provider-consultations", { search: searchTerm }],
     queryFn: () => list({ data: { search: searchTerm || undefined } }),
     placeholderData: keepPreviousData,
-  });
-
-  const inboxMut = useMutation({
-    mutationFn: async ({ tab: _tab }: { tab: Window | null }) => inbox(),
-    onSuccess: (res, vars) => {
-      if (!res.ok) {
-        closePendingTab(vars.tab);
-        toast.error(res.message);
-        return;
-      }
-      sendTabToUrl(vars.tab, res.url);
-    },
-    onError: (e: Error, vars) => {
-      closePendingTab(vars.tab);
-      toast.error(toastError(e));
-    },
   });
 
   return (
@@ -76,18 +51,6 @@ function ProviderConsultationsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            className={adminBtnSecondary}
-            disabled={inboxMut.isPending || q.data?.configured === false}
-            onClick={() => {
-              const tab = openPendingTab();
-              if (!tab) return;
-              inboxMut.mutate({ tab });
-            }}
-          >
-            {inboxMut.isPending ? "Opening…" : "Open QuickBlox inbox"}
-          </Button>
           <RefreshButton onClick={() => q.refetch()} loading={q.isFetching} />
         </div>
       </div>

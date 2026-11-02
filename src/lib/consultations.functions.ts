@@ -6,8 +6,6 @@ import { assertReviewer } from "@/lib/admin-guard";
 import { isQuickbloxConfigured, getQuickbloxConfig } from "@/lib/consultations/config";
 import {
   addProviderToDialogOccupants,
-  buildProviderAppointmentUrl,
-  buildProviderInboxUrl,
   claimAppointmentForSession,
   createPatientAppointment,
   endQuickbloxAppointment,
@@ -46,7 +44,9 @@ export type ListConsultationsResult = {
   rows: ConsultationRow[];
 };
 
-export type OpenConsultationResult = { ok: true; url: string } | { ok: false; message: string };
+export type OpenConsultationResult =
+  | { ok: true; url: string; requestId?: string | null }
+  | { ok: false; message: string };
 
 const listInput = z
   .object({
@@ -447,7 +447,7 @@ export const openConsultation = createServerFn({ method: "POST" })
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: row, error } = await supabaseAdmin
       .from("patient_consultations")
-      .select("id, user_id, qb_appointment_id")
+      .select("id, user_id, subscription_id, qb_appointment_id")
       .eq("id", data.consultationId)
       .maybeSingle();
 
@@ -463,6 +463,23 @@ export const openConsultation = createServerFn({ method: "POST" })
       if (!ids.includes(row.user_id)) return { ok: false, message: "Forbidden" };
     }
 
+    // Resolve associated medication request ID for native SDK consultation room routing
+    let requestId: string | null = null;
+    if (row.subscription_id || row.user_id) {
+      let q = supabaseAdmin
+        .from("medication_requests")
+        .select("id")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (row.subscription_id) {
+        q = q.eq("subscription_id", row.subscription_id);
+      } else if (row.user_id) {
+        q = q.eq("user_id", row.user_id);
+      }
+      const { data: reqRow } = await q.maybeSingle();
+      requestId = reqRow?.id ?? null;
+    }
+
     try {
       const session = await reviewerQuickbloxSession(role, context.userId, supabaseAdmin);
       try {
@@ -476,10 +493,8 @@ export const openConsultation = createServerFn({ method: "POST" })
       }
       return {
         ok: true,
-        url: buildProviderAppointmentUrl({
-          token: session.token,
-          appointmentId: row.qb_appointment_id,
-        }),
+        requestId,
+        url: "",
       };
     } catch (error) {
       console.error("[consultations] open failed:", error);
@@ -558,10 +573,8 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
         }
         return {
           ok: true,
-          url: buildProviderAppointmentUrl({
-            token: session.token,
-            appointmentId: storedId,
-          }),
+          requestId: req.id,
+          url: "",
         };
       }
 
@@ -657,10 +670,8 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
         if (racedId) {
           return {
             ok: true,
-            url: buildProviderAppointmentUrl({
-              token: session.token,
-              appointmentId: racedId,
-            }),
+            requestId: req.id,
+            url: "",
           };
         }
       }
@@ -691,36 +702,14 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
 
       return {
         ok: true,
-        url: buildProviderAppointmentUrl({
-          token: session.token,
-          appointmentId: appointment._id,
-        }),
+        requestId: req.id,
+        url: "",
       };
     } catch (error) {
       console.error("[consultations] start from request failed:", error);
       return {
         ok: false,
         message: error instanceof Error ? error.message : "Unable to start this consultation.",
-      };
-    }
-  });
-
-export const openProviderInbox = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .handler(async ({ context }): Promise<OpenConsultationResult> => {
-    const role = await assertReviewer(context);
-    if (!isQuickbloxConfigured()) {
-      return { ok: false, message: "Consultations are not available yet." };
-    }
-    try {
-      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      const session = await reviewerQuickbloxSession(role, context.userId, supabaseAdmin);
-      return { ok: true, url: buildProviderInboxUrl(session.token) };
-    } catch (error) {
-      console.error("[consultations] inbox open failed:", error);
-      return {
-        ok: false,
-        message: error instanceof Error ? error.message : "Unable to open QuickBlox.",
       };
     }
   });
@@ -1631,10 +1620,8 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
         chatPassword = qbConfig.providerPassword || session.token;
       }
 
-      const externalUrl = appointmentId
-        ? buildProviderAppointmentUrl({ token: session.token, appointmentId })
-        : "";
-      const embedUrl = appointmentId ? `/appointment/${appointmentId}?token=${session.token}` : "";
+      const externalUrl = "";
+      const embedUrl = "";
 
       const adminQbUserId = qbConfig.providerId ?? 142814409;
       const userDirectory: Record<

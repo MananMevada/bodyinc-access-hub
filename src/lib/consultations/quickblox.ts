@@ -563,18 +563,12 @@ export async function getAppointmentById(appointmentId: string, token?: string):
   };
 }
 
-export function buildProviderAppointmentUrl(params: { token: string; appointmentId: string }) {
-  const { providerAppUrl } = getQuickbloxConfig();
-  const url = new URL(`${providerAppUrl}/appointment/${params.appointmentId}`);
-  url.searchParams.set("token", params.token);
-  return url.toString();
+export function buildProviderAppointmentUrl(_params: { token: string; appointmentId: string }) {
+  return "";
 }
 
-export function buildProviderInboxUrl(token: string) {
-  const { providerAppUrl } = getQuickbloxConfig();
-  const url = new URL(providerAppUrl);
-  url.searchParams.set("token", token);
-  return url.toString();
+export function buildProviderInboxUrl(_token: string) {
+  return "";
 }
 
 /** Same HMAC identity the patient portal uses, so patient and doctor join the exact same visit. */

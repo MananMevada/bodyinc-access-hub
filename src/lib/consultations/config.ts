@@ -3,18 +3,7 @@ function env(name: string) {
 }
 
 export function getQuickbloxConfig() {
-  let apiUrl = (env("QUICKBLOX_API_URL") || "https://api.quickblox.com").replace(/\/$/, "");
-  if (apiUrl.includes("api-bodyinc.quickblox.com")) {
-    apiUrl = "https://api.quickblox.com";
-  }
-
-  let providerAppUrl = (
-    env("QUICKBLOX_PROVIDER_APP_URL") || "https://provider.quickblox.com"
-  ).replace(/\/$/, "");
-  if (providerAppUrl.includes("provider-bodyinc.quickblox.com")) {
-    providerAppUrl = "https://provider.quickblox.com";
-  }
-
+  const apiUrl = (env("QUICKBLOX_API_URL") || "https://api.quickblox.com").replace(/\/$/, "");
   const providerEmail = env("QUICKBLOX_PROVIDER_EMAIL") || "admin@quickblox.com";
   const providerPassword = env("QUICKBLOX_PROVIDER_PASSWORD") || "Password2026";
   const apiKey = env("QUICKBLOX_API_KEY");
@@ -43,7 +32,6 @@ export function getQuickbloxConfig() {
 
   return {
     apiUrl,
-    providerAppUrl,
     providerEmail,
     providerPassword,
     apiKey,

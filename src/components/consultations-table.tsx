@@ -1,9 +1,7 @@
-import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
-import { ArrowLeft, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,43 +21,6 @@ import {
 } from "@/lib/consultations.functions";
 import { formatDateTime, formatRecordId } from "@/lib/format";
 import { toastError } from "@/lib/toast-message";
-
-/** Open a blank tab in the click gesture, then send it to QuickBlox once the URL is ready. */
-export function openPendingTab(): Window | null {
-  const tab = window.open("about:blank", "_blank");
-  if (!tab) {
-    toast.error("Allow pop-ups for this site so QuickBlox can open in a new tab.");
-    return null;
-  }
-  try {
-    tab.document.write(
-      `<!doctype html><title>Opening consultation</title><body style="font-family:DM Sans,sans-serif;padding:32px;color:#152A51">Opening QuickBlox…</body>`,
-    );
-    tab.document.close();
-  } catch {
-    // Some browsers lock about:blank immediately; the later location replace still works.
-  }
-  return tab;
-}
-
-export function sendTabToUrl(tab: Window | null, url: string) {
-  if (tab && !tab.closed) {
-    tab.location.replace(url);
-    tab.focus();
-    return;
-  }
-  const opened = window.open(url, "_blank");
-  if (opened) return;
-  toast.error("Allow pop-ups for this site so QuickBlox can open in a new tab.");
-}
-
-export function closePendingTab(tab: Window | null) {
-  try {
-    tab?.close();
-  } catch {
-    // ignore
-  }
-}
 
 const STATUS_TONE: Record<ConsultationVisitStatus, string> = {
   open: "bg-[#6A9B9C] text-white hover:bg-[#6A9B9C]",
@@ -87,12 +48,6 @@ export function ConsultationsTable({
   onOpenPatient?: (userId: string) => void;
 }) {
   const navigate = useNavigate();
-  const [activeConsultation, setActiveConsultation] = useState<{
-    embedUrl: string;
-    externalUrl: string;
-    patientName?: string | null;
-  } | null>(null);
-  const [iframeLoading, setIframeLoading] = useState(true);
 
   const openFn = useServerFn(openConsultation);
   const openMut = useMutation({
@@ -103,20 +58,22 @@ export function ConsultationsTable({
         toast.error(res.message);
         return;
       }
-      const matched = rows.find((r) => r.id === vars.consultationId);
-      let embedUrl = res.url;
-      try {
-        const parsed = new URL(res.url);
-        embedUrl = `${parsed.pathname}${parsed.search}`;
-      } catch {
-        embedUrl = `/api/consultations/embed?url=${encodeURIComponent(res.url)}`;
+      if (res.requestId) {
+        navigate({
+          to: "/admin/requests/$requestId/consultation",
+          params: { requestId: res.requestId },
+        });
+        return;
       }
-      setActiveConsultation({
-        embedUrl,
-        externalUrl: res.url,
-        patientName: matched?.patient_name,
-      });
-      setIframeLoading(true);
+      const matched = rows.find((r) => r.id === vars.consultationId);
+      if (matched?.request_id) {
+        navigate({
+          to: "/admin/requests/$requestId/consultation",
+          params: { requestId: matched.request_id },
+        });
+        return;
+      }
+      toast.error("Could not find matching consultation request.");
     },
     onError: (e: Error) => {
       toast.error(toastError(e));
@@ -125,91 +82,6 @@ export function ConsultationsTable({
 
   const rows = result?.rows ?? [];
   const colSpan = showPatient ? 6 : 5;
-
-  if (activeConsultation) {
-    return (
-      <div className="space-y-4 font-['DM_Sans',sans-serif]">
-        {/* Top bar with back button & controls */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#D5DEDD] bg-white p-3.5 sm:px-5">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setActiveConsultation(null)}
-              className="h-9 gap-1.5 border-[#D5DEDD] px-3.5 text-[13px] font-semibold text-[#3B4759] hover:bg-[#F3F6F6]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              <span>Back to consultations</span>
-            </Button>
-
-            <div className="hidden h-4 w-px bg-[#D5DEDD] sm:block" />
-
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              </span>
-              <span className="text-[14px] font-semibold text-[#152A51]">
-                Video Consultation{" "}
-                {activeConsultation.patientName ? `· ${activeConsultation.patientName}` : ""}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <a
-              href={activeConsultation.externalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#D5DEDD] bg-white px-3 text-[12px] font-medium text-[#3B4759] hover:bg-[#F3F6F6]"
-              title="Open consultation in full new tab"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Open in New Tab</span>
-            </a>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setIframeLoading(true);
-                const current = activeConsultation.embedUrl.split("&_t=")[0];
-                setActiveConsultation({
-                  ...activeConsultation,
-                  embedUrl: `${current}&_t=${Date.now()}`,
-                });
-              }}
-              className="h-9 w-9 rounded-lg p-0 text-[#3B4759] hover:bg-[#F3F6F6]"
-              title="Reload consultation"
-            >
-              <RefreshCw className={`h-4 w-4 ${iframeLoading ? "animate-spin" : ""}`} />
-              <span className="sr-only">Reload</span>
-            </Button>
-          </div>
-        </div>
-
-        {/* Embedded Iframe Container */}
-        <div className="relative flex min-h-[680px] h-[calc(100vh-210px)] w-full flex-col overflow-hidden rounded-2xl border border-[#D5DEDD] bg-white shadow-sm">
-          {iframeLoading ? (
-            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/90 backdrop-blur-xs">
-              <Loader2 className="h-8 w-8 animate-spin text-[#152A51]" />
-              <p className="mt-3 text-[14px] font-medium text-[#152A51]">
-                Loading QuickBlox consultation room…
-              </p>
-            </div>
-          ) : null}
-          <iframe
-            src={activeConsultation.embedUrl}
-            title="Video Consultation"
-            className="h-full w-full flex-1 border-0"
-            allow="camera; microphone; display-capture; autoplay; clipboard-write; fullscreen;"
-            allowFullScreen
-            onLoad={() => setIframeLoading(false)}
-          />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="admin-table-wrap m-0 w-full">
