@@ -912,7 +912,7 @@ export function ConsultationRoomPage({
       });
     } catch (err) {
       console.error("[QuickBlox] Start call error:", err);
-      toast.error("Failed to initiate call. You can open the QuickBlox Web App above.");
+      toast.error("Failed to initiate call. Please check your camera/microphone permissions and try again.");
     }
   };
 
