@@ -1,0 +1,212 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R /F2 7 0 R /F3 8 0 R /F4 9 0 R >> >> /Contents 10 0 R >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R /F2 7 0 R /F3 8 0 R /F4 9 0 R >> >> /Contents 11 0 R >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R /F2 7 0 R /F3 8 0 R /F4 9 0 R >> >> /Contents 12 0 R >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+8 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+10 0 obj
+<< /Length 5388 >>
+stream
+0.070 0.280 0.290 rg 54.00 618.00 504.00 95.00 re f
+BT /F2 9 Tf 0.650 0.850 0.840 rg 70.00 689.00 Td (BODY INC � ACCESS HUB) Tj ET
+BT /F2 18 Tf 1.000 1.000 1.000 rg 70.00 665.00 Td (QuickBlox Architecture & Integration Audit) Tj ET
+BT /F1 10.5 Tf 0.880 0.940 0.940 rg 70.00 645.00 Td (Technical Verification: Native QuickBlox Web SDK vs. Queue Consultation) Tj ET
+BT /F1 8.5 Tf 0.750 0.850 0.850 rg 70.00 629.00 Td (Date: November 2026  |  Status: Verified & Production Ready) Tj ET
+0.950 0.980 0.980 rg 0.420 0.650 0.650 RG 1 w 54.00 516.00 504.00 82.00 re B
+0.420 0.650 0.650 rg 54.00 516.00 4.00 82.00 re f
+BT /F2 9.5 Tf 0.100 0.300 0.300 rg 68.00 584.00 Td (AUDIT VERDICT: QUEUE CONSULTATION IS COMPLETELY ELIMINATED) Tj ET
+BT /F1 8.5 Tf 0.200 0.250 0.300 rg 68.00 570.00 Td (Our audit confirms that Body Inc Access Hub is NO LONGER using QuickBlox Queue Consultation) Tj ET
+BT /F1 8.5 Tf 0.200 0.250 0.300 rg 68.00 557.50 Td (\(Q-Consultation\). The codebase has been fully refactored to use the official QuickBlox JavaScript SDK) Tj ET
+BT /F1 8.5 Tf 0.200 0.250 0.300 rg 68.00 545.00 Td (v2.24.0 on the client side and native QuickBlox REST APIs on the server. No external iframe, queue) Tj ET
+BT /F1 8.5 Tf 0.200 0.250 0.300 rg 68.00 532.50 Td (server, or third-party consultation wrapper is in use.) Tj ET
+0.100 0.500 0.500 rg 54.00 493.00 4.00 18.00 re f
+BT /F2 13.5 Tf 0.080 0.250 0.260 rg 66.00 496.00 Td (1. Are We Currently Using Queue Consultation?) Tj ET
+0.820 0.880 0.880 rg 54.00 488.00 504.00 0.50 re f
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 474.00 Td (Technical Verdict: NO. The application has entirely phased out QuickBlox Queue Consultation.) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 456.50 Td (Historically, the application relied on QuickBlox's Q-Consultation backend endpoints \(/appointments,) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 443.00 Td (/appointments/my, and /auth/login with provider/client roles\) and embedded an external iframe pointing) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 429.50 Td (to provider.quickblox.com.) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 412.00 Td (In recent architectural updates, this entire dependency was removed:) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 394.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 394.50 Td (Appointments API Removed: All /appointments routes were replaced with native QuickBlox Dialog) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 381.50 Td (REST APIs \(/chat/Dialog.json\).) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 365.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 365.50 Td (Iframe Embed Deprecated: The embed endpoint \(src/routes/api.consultations.embed.ts\) now returns) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 352.50 Td (HTTP 410 Gone with a deprecation notice.) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 336.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 336.50 Td (Native UI Implementation: Visits run 100% inside our in-house consultation room component) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 323.50 Td (\(consultation-room-page.tsx\).) Tj ET
+BT /F2 11 Tf 0.150 0.320 0.330 rg 54.00 301.50 Td (Clarification Regarding the 'Live Queue & Waiting Room' UI:) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 285.50 Td (In the consultation room interface, you will see a panel named 'Live Queue & Waiting Room'. This is) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 272.00 Td (NOT QuickBlox Queue Consultation. It is an internal clinic dashboard that reads our Supabase database) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 258.50 Td (and active QuickBlox Dialogs to give practitioners real-time visibility of waiting patients.) Tj ET
+0.100 0.500 0.500 rg 54.00 228.00 4.00 18.00 re f
+BT /F2 13.5 Tf 0.080 0.250 0.260 rg 66.00 231.00 Td (2. Which QuickBlox SDK Are We Currently Using?) Tj ET
+0.820 0.880 0.880 rg 54.00 223.00 504.00 0.50 re f
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 209.00 Td (The application utilizes two distinct official QuickBlox components:) Tj ET
+0.120 0.380 0.400 rg 54.00 171.50 504.00 20.00 re f
+BT /F2 8.5 Tf 1.000 1.000 1.000 rg 60.00 177.50 Td (Component) Tj ET
+BT /F2 8.5 Tf 1.000 1.000 1.000 rg 170.00 177.50 Td (Version / Location) Tj ET
+BT /F2 8.5 Tf 1.000 1.000 1.000 rg 350.00 177.50 Td (Technical Role & Scope) Tj ET
+1.000 1.000 1.000 rg 0.880 0.900 0.920 RG 0.5 w 54.00 151.50 504.00 20.00 re B
+BT /F1 8 Tf 0.150 0.200 0.250 rg 60.00 157.50 Td (Client Web SDK) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 170.00 157.50 Td (v2.24.0 \(Build 1180\) / public/quickblox.min.js) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 350.00 157.50 Td (Runs in browser; WebRTC calling & real-time XMPP chat.) Tj ET
+0.970 0.980 0.990 rg 0.880 0.900 0.920 RG 0.5 w 54.00 131.50 504.00 20.00 re B
+BT /F1 8 Tf 0.150 0.200 0.250 rg 60.00 137.50 Td (Server REST API) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 170.00 137.50 Td (REST v0.1.1 / src/lib/consultations/quickblox.ts) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 350.00 137.50 Td (Server HMAC session, deterministic user & dialog creation.) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 119.50 Td (Client SDK Capabilities:) Tj ET
+0.82 0.88 0.88 rg 54.00 42.00 504.00 0.5 re f
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 54.00 28.00 Td (Confidential � Body Inc Telehealth Platform) Tj ET
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 513.00 28.00 Td (Page 1 of 3) Tj ET
+endstream
+endobj
+11 0 obj
+<< /Length 5371 >>
+stream
+0.82 0.88 0.88 rg 54.00 754.00 504.00 0.5 re f
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 54.00 760.00 Td (BODY INC � QUICKBLOX ARCHITECTURE & AUDIT REPORT) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 713.00 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 713.00 Td (QB.webrtc: Manages audio and video calling, peer connections, microphone/camera permissions,) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 700.00 Td (local stream capture, and remote video rendering.) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 684.00 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 684.00 Td (QB.chat: Connects to QuickBlox XMPP servers, joins Multi-User Chat \(MUC\) dialogs, delivers) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 671.00 Td (real-time messages, and tracks typing indicators.) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 655.00 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 655.00 Td (QB.content: Handles encrypted medical attachment uploads \(photos, lab sheets, PDFs\) via native) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 642.00 Td (content endpoints.) Tj ET
+0.100 0.500 0.500 rg 54.00 613.00 4.00 18.00 re f
+BT /F2 13.5 Tf 0.080 0.250 0.260 rg 66.00 616.00 Td (3. Which Implementation Was Used Before Queue Consultation?) Tj ET
+0.820 0.880 0.880 rg 54.00 608.00 504.00 0.50 re f
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 594.00 Td (Prior to integrating Queue Consultation, there was no other communication SDK in this codebase.) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 576.50 Td (The consultation feature was first initiated using QuickBlox Q-Consultation \(Queue Consultation\) REST) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 563.00 Td (endpoints and an embedded iframe. It was later replaced because Q-Consultation introduced cross-domain) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 549.50 Td (cookie issues, styling inflexibility, and session desynchronization. Direct SDK integration replaced) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 536.00 Td (it cleanly.) Tj ET
+0.100 0.500 0.500 rg 54.00 505.50 4.00 18.00 re f
+BT /F2 13.5 Tf 0.080 0.250 0.260 rg 66.00 508.50 Td (4. Direct Patient, Doctor, and Admin Communication Architecture) Tj ET
+0.820 0.880 0.880 rg 54.00 500.50 504.00 0.50 re f
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 486.50 Td (Without Queue Consultation, the communication flow operates directly through QuickBlox native) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 473.00 Td (entities:) Tj ET
+BT /F2 11 Tf 0.150 0.320 0.330 rg 54.00 449.50 Td (A. User Provisioning & Authentication) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 433.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 433.50 Td (Doctors: Provisioned via POST /users.json tagged 'provider, doctor'. Sessions authenticated via) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 420.50 Td (POST /session.json.) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 404.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 404.50 Td (Patients: Provisioned deterministically via HMAC SHA-256 identities derived from patient ID,) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 391.50 Td (subscription ID, and QUICKBLOX_USER_SECRET.) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 375.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 375.50 Td (Admins: Authenticated with clinic owner credentials \(QUICKBLOX_PROVIDER_EMAIL and) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 362.50 Td (QUICKBLOX_PROVIDER_PASSWORD\).) Tj ET
+BT /F2 11 Tf 0.150 0.320 0.330 rg 54.00 340.50 Td (B. Communication Entity: Group Chat Dialog \(Type 2\)) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 324.50 Td (When a consultation begins, the server creates a native QuickBlox Group Dialog \(POST) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 311.00 Td (/chat/Dialog.json\) with occupants: [Patient QB ID, Doctor QB ID, Admin QB ID]. This provides an) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 297.50 Td (xmpp_room_jid that both parties join.) Tj ET
+BT /F2 11 Tf 0.150 0.320 0.330 rg 54.00 274.00 Td (C. Real-Time Chat \(XMPP Protocol\)) Tj ET
+0.960 0.970 0.980 rg 0.850 0.880 0.900 RG 0.75 w 54.00 152.00 504.00 106.00 re B
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 246.00 Td (// 1. Connect to XMPP Chat Cluster) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 234.50 Td (QB.chat.connect\({ userId: providerUid, password: sessionToken }, \(err\) => {) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 223.00 Td (  // 2. Join the Consultation MUC Room) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 211.50 Td (  QB.chat.muc.join\(dialog.xmpp_room_jid, \(\) => console.log\('Joined room'\)\);) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 200.00 Td (}\);) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 188.50 Td (// 3. Send & Receive Messages) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 177.00 Td (QB.chat.send\(dialog.xmpp_room_jid, { body: 'Hello', type: 'groupchat', extension: { save_to_history: 1 } }\);) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 165.50 Td (QB.chat.onMessageListener = \(userId, message\) => renderMessage\(message\);) Tj ET
+BT /F2 11 Tf 0.150 0.320 0.330 rg 54.00 136.00 Td (D. WebRTC Audio & Video Calling) Tj ET
+0.82 0.88 0.88 rg 54.00 42.00 504.00 0.5 re f
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 54.00 28.00 Td (Confidential � Body Inc Telehealth Platform) Tj ET
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 513.00 28.00 Td (Page 2 of 3) Tj ET
+endstream
+endobj
+12 0 obj
+<< /Length 3998 >>
+stream
+0.82 0.88 0.88 rg 54.00 754.00 504.00 0.5 re f
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 54.00 760.00 Td (BODY INC � QUICKBLOX ARCHITECTURE & AUDIT REPORT) Tj ET
+0.960 0.970 0.980 rg 0.850 0.880 0.900 RG 0.75 w 54.00 607.00 504.00 106.00 re B
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 701.00 Td (// Doctor initiates peer-to-peer call directly to Patient QuickBlox ID) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 689.50 Td (const session = QB.webrtc.createNewSession\([patientQbUserId], QB.webrtc.CallType.VIDEO\);) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 678.00 Td (session.getUserMedia\({ audio: true, video: true }, \(err, stream\) => {) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 666.50 Td (  localVideoElem.srcObject = stream;) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 655.00 Td (  session.call\({ appointment_id: consultationId, doctor_name: 'Dr. Smith' }\);) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 643.50 Td (}\);) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 632.00 Td (// Patient answers call upon onCallListener) Tj ET
+BT /F4 8 Tf 0.100 0.180 0.280 rg 66.00 620.50 Td (session.accept\({}\);) Tj ET
+0.100 0.500 0.500 rg 54.00 584.00 4.00 18.00 re f
+BT /F2 13.5 Tf 0.080 0.250 0.260 rg 66.00 587.00 Td (5. Codebase Changes & Verification Summary) Tj ET
+0.820 0.880 0.880 rg 54.00 579.00 504.00 0.50 re f
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 54.00 565.00 Td (All changes required to eliminate Queue Consultation have been verified and finalized:) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 547.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 547.50 Td (Removed QUICKBLOX_PROVIDER_APP_URL: Cleaned from .env and .env.example, eliminating references to) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 534.50 Td (provider.quickblox.com.) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 518.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 518.50 Td (Updated Call Error Handling: Replaced outdated toast copy referring to the external Web App with) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 505.50 Td (actionable media permission guidance.) Tj ET
+BT /F2 9.5 Tf 0.100 0.500 0.500 rg 58.00 489.50 Td (-) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 489.50 Td (Preserved 100% UI/UX Design: The clinical consultation screen, patient intake cards, medication) Tj ET
+BT /F1 9.5 Tf 0.150 0.180 0.220 rg 70.00 476.50 Td (tabs, video layout, and chat pane remain visually and functionally identical.) Tj ET
+BT /F2 11 Tf 0.150 0.320 0.330 rg 54.00 454.50 Td (Build & Type Check Verification:) Tj ET
+0.120 0.380 0.400 rg 54.00 418.50 504.00 20.00 re f
+BT /F2 8.5 Tf 1.000 1.000 1.000 rg 60.00 424.50 Td (Verification Test) Tj ET
+BT /F2 8.5 Tf 1.000 1.000 1.000 rg 200.00 424.50 Td (Command Executed) Tj ET
+BT /F2 8.5 Tf 1.000 1.000 1.000 rg 360.00 424.50 Td (Result) Tj ET
+1.000 1.000 1.000 rg 0.880 0.900 0.920 RG 0.5 w 54.00 398.50 504.00 20.00 re B
+BT /F1 8 Tf 0.150 0.200 0.250 rg 60.00 404.50 Td (TypeScript Type Check) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 200.00 404.50 Td (npx tsc --noEmit) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 360.00 404.50 Td (PASSED \(0 Errors\)) Tj ET
+0.970 0.980 0.990 rg 0.880 0.900 0.920 RG 0.5 w 54.00 378.50 504.00 20.00 re B
+BT /F1 8 Tf 0.150 0.200 0.250 rg 60.00 384.50 Td (Production Vite/SSR Build) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 200.00 384.50 Td (npm run build) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 360.00 384.50 Td (SUCCESS \(Nitro & client assets built\)) Tj ET
+1.000 1.000 1.000 rg 0.880 0.900 0.920 RG 0.5 w 54.00 358.50 504.00 20.00 re B
+BT /F1 8 Tf 0.150 0.200 0.250 rg 60.00 364.50 Td (External Dependencies Check) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 200.00 364.50 Td (grep -rn provider.quickblox.com src/) Tj ET
+BT /F1 8 Tf 0.150 0.200 0.250 rg 360.00 364.50 Td (CLEAN \(0 active dependencies\)) Tj ET
+0.82 0.88 0.88 rg 54.00 42.00 504.00 0.5 re f
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 54.00 28.00 Td (Confidential � Body Inc Telehealth Platform) Tj ET
+BT /F1 7.5 Tf 0.45 0.55 0.55 rg 513.00 28.00 Td (Page 3 of 3) Tj ET
+endstream
+endobj
+xref
+0 13
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000284 00000 n 
+0000000441 00000 n 
+0000000598 00000 n 
+0000000668 00000 n 
+0000000743 00000 n 
+0000000821 00000 n 
+0000000889 00000 n 
+0000006330 00000 n 
+0000011754 00000 n 
+trailer
+<< /Size 13 /Root 1 0 R >>
+startxref
+15805
+%%EOF
