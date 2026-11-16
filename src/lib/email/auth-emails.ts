@@ -12,7 +12,7 @@ export function verificationCodeEmail(params: {
 } {
   const first = (params.fullName ?? "").trim().split(/\s+/)[0] || "";
   const hello = first ? `Hello ${first},` : "Hello,";
-  const spaced = params.code.trim().split("").join(" ");
+  const code = params.code.trim();
   const isChange = params.purpose === "change_email";
   const isReset = params.purpose === "reset";
   const instruction = isChange
@@ -25,7 +25,7 @@ export function verificationCodeEmail(params: {
     `<p>${hello}</p>`,
     `<p>${instruction}</p>`,
     emailSoftPanel(
-      `<p style="margin:0;text-align:center;font-size:28px;font-weight:600;letter-spacing:0.28em;line-height:1.4;color:${EMAIL_THEME.navy};">${spaced}</p>`,
+      `<p style="margin:0;text-align:center;font-size:28px;font-weight:600;letter-spacing:0.28em;line-height:1.4;color:${EMAIL_THEME.navy};">${code}</p>`,
       "center",
     ),
     `<p>This code will expire in <strong>10 minutes</strong>.</p>`,

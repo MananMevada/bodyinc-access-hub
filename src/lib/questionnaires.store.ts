@@ -176,8 +176,8 @@ export async function updateQuestionnaire(
 }
 
 export async function deleteQuestionnaire(id: string): Promise<{ ok: true }> {
-  const { error } = await supabase.from("questionnaires").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  const { deleteStoredRecord } = await import("@/lib/catalog-deletes.functions");
+  await deleteStoredRecord({ data: { kind: "questionnaire", id } });
   return { ok: true };
 }
 
@@ -227,8 +227,8 @@ export async function updateQuestion(
 }
 
 export async function deleteQuestion(id: string): Promise<{ ok: true }> {
-  const { error } = await supabase.from("questionnaire_questions").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  const { deleteStoredRecord } = await import("@/lib/catalog-deletes.functions");
+  await deleteStoredRecord({ data: { kind: "question", id } });
   return { ok: true };
 }
 

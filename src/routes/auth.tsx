@@ -323,7 +323,8 @@ function AuthPage() {
                       <InputOTP
                         maxLength={8}
                         value={otpCode}
-                        onChange={(v) => setOtpCode(v)}
+                        onChange={(v) => setOtpCode(v.replace(/\D/g, "").slice(0, 8))}
+                        pasteTransformer={(pasted) => pasted.replace(/\D/g, "").slice(0, 8)}
                         disabled={otpSubmitting}
                         containerClassName="gap-1.5 sm:gap-2"
                       >

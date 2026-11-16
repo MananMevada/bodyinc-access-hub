@@ -156,7 +156,7 @@ const bulkPackagesInput = z.object({
 /** One server round-trip for many plans. Used by medicine save instead of N sequential syncs. */
 export const syncPackagesToStripe = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => bulkPackagesInput.parse(input))
+  .validator((input: unknown) => bulkPackagesInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -184,7 +184,7 @@ export const syncPackagesToStripe = createServerFn({ method: "POST" })
 // one bad row cannot abort the rest of the run.
 export const syncUnpricedPackages = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => bulkSyncInput.parse(input))
+  .validator((input: unknown) => bulkSyncInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -222,7 +222,7 @@ export const syncUnpricedPackages = createServerFn({ method: "POST" })
 // the time this runs.
 export const archiveStripeObjects = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => archiveInput.parse(input))
+  .validator((input: unknown) => archiveInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { getStripe } = await import("@/integrations/stripe/client.server");

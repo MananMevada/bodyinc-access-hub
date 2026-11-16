@@ -23,6 +23,7 @@ export default defineConfig({
   // rejects any path with colons on non-Windows systems, so relax it for local dev.
   vite: {
     server: {
+      port: 8080,
       fs: {
         strict: false,
       },

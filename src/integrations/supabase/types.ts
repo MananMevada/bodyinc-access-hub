@@ -684,6 +684,10 @@ export type Database = {
       medication_requests: {
         Row: {
           billing_period_end: string | null
+          claim_locked_at: string | null
+          claim_locked_by: string | null
+          consultation_mode: string | null
+          consultation_scheduled_at: string | null
           created_at: string
           decision_at: string | null
           decision_by: string | null
@@ -696,8 +700,15 @@ export type Database = {
           life_file_status: string | null
           life_file_submitted_at: string | null
           medicine_id: string | null
+          order_group_id: string
           package_id: string | null
           payment_id: string | null
+          plan_change_deadline: string | null
+          plan_change_delta_cents: number | null
+          plan_change_token: string | null
+          previous_medicine_id: string | null
+          previous_package_id: string | null
+          previous_variant_id: string | null
           provider_id: string | null
           requires_consultation: boolean
           session_id: string | null
@@ -712,6 +723,10 @@ export type Database = {
         }
         Insert: {
           billing_period_end?: string | null
+          claim_locked_at?: string | null
+          claim_locked_by?: string | null
+          consultation_mode?: string | null
+          consultation_scheduled_at?: string | null
           created_at?: string
           decision_at?: string | null
           decision_by?: string | null
@@ -724,8 +739,15 @@ export type Database = {
           life_file_status?: string | null
           life_file_submitted_at?: string | null
           medicine_id?: string | null
+          order_group_id?: string
           package_id?: string | null
           payment_id?: string | null
+          plan_change_deadline?: string | null
+          plan_change_delta_cents?: number | null
+          plan_change_token?: string | null
+          previous_medicine_id?: string | null
+          previous_package_id?: string | null
+          previous_variant_id?: string | null
           provider_id?: string | null
           requires_consultation?: boolean
           session_id?: string | null
@@ -740,6 +762,10 @@ export type Database = {
         }
         Update: {
           billing_period_end?: string | null
+          claim_locked_at?: string | null
+          claim_locked_by?: string | null
+          consultation_mode?: string | null
+          consultation_scheduled_at?: string | null
           created_at?: string
           decision_at?: string | null
           decision_by?: string | null
@@ -752,8 +778,15 @@ export type Database = {
           life_file_status?: string | null
           life_file_submitted_at?: string | null
           medicine_id?: string | null
+          order_group_id?: string
           package_id?: string | null
           payment_id?: string | null
+          plan_change_deadline?: string | null
+          plan_change_delta_cents?: number | null
+          plan_change_token?: string | null
+          previous_medicine_id?: string | null
+          previous_package_id?: string | null
+          previous_variant_id?: string | null
           provider_id?: string | null
           requires_consultation?: boolean
           session_id?: string | null
@@ -850,33 +883,42 @@ export type Database = {
         Row: {
           api_base_url: string
           api_network_id: string | null
+          api_password: string | null
+          api_username: string | null
           created_at: string
           id: string
           is_active: boolean
           location_id: string | null
           name: string
+          practice_id: number | null
           updated_at: string
           vendor_id: string | null
         }
         Insert: {
           api_base_url: string
           api_network_id?: string | null
+          api_password?: string | null
+          api_username?: string | null
           created_at?: string
           id?: string
           is_active?: boolean
           location_id?: string | null
           name: string
+          practice_id?: number | null
           updated_at?: string
           vendor_id?: string | null
         }
         Update: {
           api_base_url?: string
           api_network_id?: string | null
+          api_password?: string | null
+          api_username?: string | null
           created_at?: string
           id?: string
           is_active?: boolean
           location_id?: string | null
           name?: string
+          practice_id?: number | null
           updated_at?: string
           vendor_id?: string | null
         }
@@ -1006,6 +1048,7 @@ export type Database = {
           requires_consultation: boolean
           requires_followup: boolean
           requires_questionnaire: boolean
+          show_to_providers: boolean
           short_description: string
           sort_order: number
           status: Database["public"]["Enums"]["medicine_status"]
@@ -1026,6 +1069,7 @@ export type Database = {
           requires_consultation?: boolean
           requires_followup?: boolean
           requires_questionnaire?: boolean
+          show_to_providers?: boolean
           short_description: string
           sort_order?: number
           status?: Database["public"]["Enums"]["medicine_status"]
@@ -1046,6 +1090,7 @@ export type Database = {
           requires_consultation?: boolean
           requires_followup?: boolean
           requires_questionnaire?: boolean
+          show_to_providers?: boolean
           short_description?: string
           sort_order?: number
           status?: Database["public"]["Enums"]["medicine_status"]
@@ -1684,8 +1729,10 @@ export type Database = {
           credentials: string | null
           dea: string | null
           id: string
+          availability_note: string | null
           is_active: boolean
           is_default: boolean
+          is_unavailable: boolean
           languages: string[]
           license_number: string | null
           license_states: string[]
@@ -1701,6 +1748,7 @@ export type Database = {
         Insert: {
           address_line1?: string | null
           address_line2?: string | null
+          availability_note?: string | null
           bio?: string | null
           city?: string | null
           consultation_types?: string[]
@@ -1711,6 +1759,7 @@ export type Database = {
           id: string
           is_active?: boolean
           is_default?: boolean
+          is_unavailable?: boolean
           languages?: string[]
           license_number?: string | null
           license_states?: string[]
@@ -1726,6 +1775,7 @@ export type Database = {
         Update: {
           address_line1?: string | null
           address_line2?: string | null
+          availability_note?: string | null
           bio?: string | null
           city?: string | null
           consultation_types?: string[]
@@ -1736,6 +1786,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           is_default?: boolean
+          is_unavailable?: boolean
           languages?: string[]
           license_number?: string | null
           license_states?: string[]

@@ -7,6 +7,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { ArrowLeft, Mail } from "lucide-react";
+import { FieldError, RequiredMark } from "@/components/admin/required-mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +45,7 @@ import {
 import {
   adminLabel,
   adminInput,
+  adminInputError,
   adminSelect,
   adminSectionTitle,
   adminSectionSubtitle,
@@ -201,8 +203,11 @@ function PatientDetailPage() {
                 <CardTitle className={adminSectionTitle}>
                   {d.full_name || "Unnamed patient"}
                 </CardTitle>
-                <span className="font-mono text-xs font-semibold text-[#3B4759]/80 bg-[#F2F7F6] px-2 py-0.5 rounded border border-[#D5DEDD]">
-                  Patient ID: {patientId}
+                <span
+                  className="font-mono text-xs font-semibold text-[#3B4759]/80 bg-[#F2F7F6] px-2 py-0.5 rounded border border-[#D5DEDD]"
+                  title={patientId}
+                >
+                  Patient ID: {formatRecordId(patientId)}
                 </span>
               </div>
               <CardDescription className={adminSectionSubtitle}>{d.email}</CardDescription>
@@ -581,6 +586,7 @@ function ProfileTab({
   const [phone, setPhone] = useState(defaultValues.phone);
   const [dob, setDob] = useState(defaultValues.dob);
   const [sex, setSex] = useState(defaultValues.sex);
+  const [nameError, setNameError] = useState("");
 
   useEffect(() => {
     setFullName(defaultValues.full_name);
@@ -603,9 +609,10 @@ function ProfileTab({
           onSubmit={(e) => {
             e.preventDefault();
             if (!full_name.trim()) {
-              toast.error("Enter the patient's full name.");
+              setNameError("Please enter the patient's full name.");
               return;
             }
+            setNameError("");
             onSubmit({
               full_name: titleCaseName(full_name),
               phone: phone.trim(),
@@ -618,14 +625,19 @@ function ProfileTab({
             <div className="space-y-2">
               <Label htmlFor="full_name" className={adminLabel}>
                 Full name
+                <RequiredMark />
               </Label>
               <Input
                 id="full_name"
                 value={full_name}
-                onChange={(e) => setFullName(e.target.value)}
+                onChange={(e) => {
+                  setFullName(e.target.value);
+                  if (e.target.value.trim()) setNameError("");
+                }}
                 required
-                className={adminInput}
+                className={`${adminInput} ${nameError ? adminInputError : ""}`}
               />
+              <FieldError message={nameError} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="phone" className={adminLabel}>
@@ -750,14 +762,20 @@ function ClinicalSummaryCard({
             {patientId && (
               <Metric
                 label="Patient ID"
-                value={<span className="font-mono text-xs select-all">{patientId}</span>}
+                value={
+                  <span className="space-y-0.5" title={patientId}>
+                    <span className="block font-mono text-sm font-semibold">
+                      {formatRecordId(patientId)}
+                    </span>
+                    <span className="block font-mono text-[11px] text-[#3B4759]/55 select-all">
+                      {patientId}
+                    </span>
+                  </span>
+                }
               />
             )}
             <Metric label="Date of birth" value={dob ? formatDate(dob) : "—"} />
-            <Metric
-              label="Age"
-              value={ageFromDob(dob) != null ? `${ageFromDob(dob)} yrs` : "—"}
-            />
+            <Metric label="Age" value={ageFromDob(dob) != null ? `${ageFromDob(dob)} yrs` : "—"} />
             <Metric label="BMI" value={data.bmi != null ? String(data.bmi) : "—"} />
             <Metric
               label="Height & Weight"
@@ -832,8 +850,15 @@ function AddressCard({
     defaultValues.country,
   ]);
 
-  const set = (key: keyof typeof form, value: string) =>
-    setForm((f) => ({ ...f, [key]: key === "postal_code" ? digitsOnlyZip(value) : value }));
+  const [addressErrors, setAddressErrors] = useState<
+    Partial<Record<"street_address" | "city" | "state_code" | "postal_code", string>>
+  >({});
+
+  const set = (key: keyof typeof form, value: string) => {
+    const next = key === "postal_code" ? digitsOnlyZip(value) : value;
+    setForm((f) => ({ ...f, [key]: next }));
+    setAddressErrors((prev) => ({ ...prev, [key]: undefined }));
+  };
 
   const consentBadge = (label: string, on: boolean) => (
     <Badge
@@ -860,6 +885,14 @@ function AddressCard({
           className="space-y-4"
           onSubmit={(e) => {
             e.preventDefault();
+            const next: Partial<Record<"street_address" | "city" | "state_code" | "postal_code", string>> =
+              {};
+            if (!form.street_address.trim()) next.street_address = "Please enter the street address.";
+            if (!form.city.trim()) next.city = "Please enter the city.";
+            if (!form.state_code.trim()) next.state_code = "Please choose a state.";
+            if (!form.postal_code.trim()) next.postal_code = "Please enter the ZIP code.";
+            setAddressErrors(next);
+            if (Object.keys(next).length) return;
             onSubmit({
               street_address: titleCaseName(form.street_address) || null,
               apartment: form.apartment.trim() || null,
@@ -874,13 +907,15 @@ function AddressCard({
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="street_address" className={adminLabel}>
                 Street address
+                <RequiredMark />
               </Label>
               <Input
                 id="street_address"
                 value={form.street_address}
                 onChange={(e) => set("street_address", e.target.value)}
-                className={adminInput}
+                className={`${adminInput} ${addressErrors.street_address ? adminInputError : ""}`}
               />
+              <FieldError message={addressErrors.street_address} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="apartment" className={adminLabel}>
@@ -896,23 +931,26 @@ function AddressCard({
             <div className="space-y-2">
               <Label htmlFor="city" className={adminLabel}>
                 City
+                <RequiredMark />
               </Label>
               <Input
                 id="city"
                 value={form.city}
                 onChange={(e) => set("city", e.target.value)}
-                className={adminInput}
+                className={`${adminInput} ${addressErrors.city ? adminInputError : ""}`}
               />
+              <FieldError message={addressErrors.city} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="state_code" className={adminLabel}>
                 State
+                <RequiredMark />
               </Label>
               <select
                 id="state_code"
                 value={form.state_code}
                 onChange={(e) => set("state_code", e.target.value)}
-                className={adminSelect}
+                className={`${adminSelect} ${addressErrors.state_code ? adminInputError : ""}`}
               >
                 <option value="">Not specified</option>
                 {US_STATES.map((s) => (
@@ -921,10 +959,12 @@ function AddressCard({
                   </option>
                 ))}
               </select>
+              <FieldError message={addressErrors.state_code} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="postal_code" className={adminLabel}>
                 ZIP code
+                <RequiredMark />
               </Label>
               <Input
                 id="postal_code"
@@ -934,8 +974,9 @@ function AddressCard({
                 autoComplete="postal-code"
                 value={digitsOnlyZip(form.postal_code)}
                 onChange={(e) => set("postal_code", e.target.value)}
-                className={adminInput}
+                className={`${adminInput} ${addressErrors.postal_code ? adminInputError : ""}`}
               />
+              <FieldError message={addressErrors.postal_code} />
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="country" className={adminLabel}>

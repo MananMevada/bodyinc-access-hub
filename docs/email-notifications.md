@@ -19,9 +19,9 @@ flowchart TD
   Review --> Reject[Rejected and refund]
   Review --> ChangeMed[Medicine changed]
   ChangeMed --> ExtraPay[Awaiting additional payment]
-  ExtraPay --> Approve
+  ExtraPay --> Pharmacy[Sent to pharmacy on payment]
   Approve --> Rx[Prescribed]
-  Rx --> Pharmacy[Sent to pharmacy]
+  Rx --> Pharmacy
   Pharmacy --> Ship[Dispatched]
   Ship --> Delivered[Delivered]
 ```
@@ -35,6 +35,7 @@ flowchart TD
 | Consultation approved                                     | Patient            | `approveRequest`                 | `patient_approved`                                                 |
 | Order rejected + refund                                   | Patient            | `rejectRequest`                  | `patient_rejected`                                                 |
 | Additional payment required                               | Patient + Provider | `changeRequestMedicine`          | `patient_additional_payment`, `provider_needs_attention`           |
+| Additional payment received → pharmacy                    | Patient            | Stripe webhook / internal confirm | `patient_sent_to_pharmacy`                                        |
 | Medicine changed (same/cheaper)                           | Patient            | `changeRequestMedicine`          | `patient_medicine_changed`                                         |
 | Prescription ready                                        | Patient            | `generatePrescription`           | `patient_prescription_ready`                                       |
 | Sent to pharmacy / Shipped / Delivered                    | Patient            | `advanceRequestStatus`           | `patient_sent_to_pharmacy`, `patient_shipped`, `patient_delivered` |
@@ -52,7 +53,6 @@ Skip provider email when the actor is the assigned provider (same rule as in-app
 | ------------------------------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | **Order confirmed**                              | Created by DB trigger `create_medication_order_on_payment` | Patient portal / Stripe webhook / Edge Function calling `sendTransactionalEmail` with `patient_order_confirmed` |
 | **Auto provider assign / pending_review**        | Same SQL trigger + `notify_provider_on_request_change`     | Edge Function or HTTP webhook → Brevo                                                                           |
-| **Additional payment received**                  | Patient portal / Stripe webhook                            | Call from that service                                                                                          |
 | Subscription cancel, wallet, referral, admin ops | Other portals / lower priority                             | Add later                                                                                                       |
 
 ---

@@ -39,7 +39,7 @@ const listInput = z
 
 export const listProviders = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => listInput.parse(input ?? {}))
+  .validator((input: unknown) => listInput.parse(input ?? {}))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     let query = context.supabase
@@ -81,6 +81,23 @@ export const listProviders = createServerFn({ method: "POST" })
         licenseRows = licenseSelect.data ?? [];
       }
     }
+    let unavailableIds = new Set<string>();
+    if (ids.length > 0) {
+      const avail = await context.supabase
+        .from("providers")
+        .select("id, is_unavailable")
+        .in("id", ids);
+      if (avail.error && !/is_unavailable/i.test(avail.error.message)) {
+        throw new Error(avail.error.message);
+      }
+      if (!avail.error) {
+        unavailableIds = new Set(
+          (avail.data ?? [])
+            .filter((p: { is_unavailable?: boolean }) => p.is_unavailable)
+            .map((p: { id: string }) => p.id),
+        );
+      }
+    }
     const licenseMap = new Map(
       (licenseRows ?? []).map((p: { id: string; license_states: string[] | null }) => [
         p.id,
@@ -104,6 +121,7 @@ export const listProviders = createServerFn({ method: "POST" })
       ...r,
       is_default: r.id === defaultId,
       license_states: licenseMap.get(r.id) ?? [],
+      is_unavailable: unavailableIds.has(r.id),
       qb_user_id: qbMap.get(r.id) ?? null,
     }));
   });
@@ -112,7 +130,7 @@ export const listProviders = createServerFn({ method: "POST" })
 // provider covers the patient's state). Only one provider can be the default at a time.
 export const setDefaultProvider = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -127,7 +145,7 @@ export const setDefaultProvider = createServerFn({ method: "POST" })
 
 export const getProvider = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { data: provider, error } = await context.supabase
@@ -152,7 +170,7 @@ const createInput = createProviderFormSchema.extend({
 
 export const createProvider = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => createInput.parse(input))
+  .validator((input: unknown) => createInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -235,7 +253,7 @@ const updateInput = providerFormSchema.partial().extend({
 
 export const updateProvider = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => updateInput.parse(input))
+  .validator((input: unknown) => updateInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { id, email, ...rest } = data;
@@ -268,7 +286,7 @@ export const updateProvider = createServerFn({ method: "POST" })
 
 export const resendInvite = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ id: z.string().uuid(), redirect_to: z.string().url() }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -296,7 +314,7 @@ export const resendInvite = createServerFn({ method: "POST" })
 
 export const enableQuickbloxAgent = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -306,7 +324,7 @@ export const enableQuickbloxAgent = createServerFn({ method: "POST" })
 
 export const setProviderActive = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ id: z.string().uuid(), is_active: z.boolean() }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -326,11 +344,42 @@ export const setProviderActive = createServerFn({ method: "POST" })
 
 export const deleteProvider = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(data.id);
-    if (error) throw new Error(error.message);
+    const { authUserBackup, backupThen, fetchMatching, newBackupId } = await import(
+      "@/lib/data-backup.server"
+    );
+    const db = supabaseAdmin as any;
+    const [authUserRes, profileRes, providerRows, roles, credentials] = await Promise.all([
+      supabaseAdmin.auth.admin.getUserById(data.id),
+      db.from("profiles").select("*").eq("id", data.id).maybeSingle(),
+      fetchMatching(db, "providers", "id", [data.id]),
+      fetchMatching(db, "user_roles", "user_id", [data.id]),
+      fetchMatching(db, "provider_life_file_credentials", "provider_id", [data.id]),
+    ]);
+    if (profileRes.error) throw new Error(profileRes.error.message);
+    const person = profileRes.data as { full_name?: string | null; email?: string | null } | null;
+    await backupThen(
+      db,
+      {
+        wipeId: newBackupId(),
+        group: "provider",
+        wipedBy: context.userId,
+        label: person?.full_name?.trim() || person?.email || "Provider",
+        batches: [
+          { table: "auth.users", rows: authUserRes.data.user ? [authUserBackup(authUserRes.data.user)] : [] },
+          { table: "profiles", rows: profileRes.data ? [profileRes.data] : [] },
+          { table: "user_roles", rows: roles },
+          { table: "providers", rows: providerRows },
+          { table: "provider_life_file_credentials", rows: credentials },
+        ],
+      },
+      async () => {
+        const { error } = await supabaseAdmin.auth.admin.deleteUser(data.id);
+        if (error) throw new Error(error.message);
+      },
+    );
     return { ok: true };
   });

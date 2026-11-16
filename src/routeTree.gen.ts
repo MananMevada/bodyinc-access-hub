@@ -14,6 +14,7 @@ import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as PlanChangeTokenRouteImport } from './routes/plan-change.$token'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AppointmentSplatRouteImport } from './routes/appointment.$'
 import { Route as AuthenticatedProviderRouteImport } from './routes/_authenticated/provider'
@@ -21,12 +22,21 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
 import { Route as AuthenticatedProviderIndexRouteImport } from './routes/_authenticated/provider.index'
 import { Route as AuthenticatedAdminIndexRouteImport } from './routes/_authenticated/admin.index'
+import { Route as ApiStripeWebhookRouteImport } from './routes/api.stripe.webhook'
+import { Route as ApiLifefileDataPushRouteImport } from './routes/api.lifefile.data-push'
+import { Route as ApiInternalRemindersRouteImport } from './routes/api.internal.reminders'
+import { Route as ApiInternalPlanChangeAcceptedRouteImport } from './routes/api.internal.plan-change-accepted'
 import { Route as ApiInternalNewFeedbackRouteImport } from './routes/api.internal.new-feedback'
+import { Route as ApiInternalAdditionalPaymentPaidRouteImport } from './routes/api.internal.additional-payment-paid'
+import { Route as ApiInternalAdditionalPaymentDeclinedRouteImport } from './routes/api.internal.additional-payment-declined'
 import { Route as ApiConsultationsEmbedRouteImport } from './routes/api.consultations.embed'
 import { Route as AuthenticatedRxPrescriptionIdRouteImport } from './routes/_authenticated/rx.$prescriptionId'
 import { Route as AuthenticatedProviderQueueRouteImport } from './routes/_authenticated/provider.queue'
 import { Route as AuthenticatedProviderProfileRouteImport } from './routes/_authenticated/provider.profile'
+import { Route as AuthenticatedProviderPayoutsRouteImport } from './routes/_authenticated/provider.payouts'
 import { Route as AuthenticatedProviderNotificationsRouteImport } from './routes/_authenticated/provider.notifications'
+import { Route as AuthenticatedProviderHelpRouteImport } from './routes/_authenticated/provider.help'
+import { Route as AuthenticatedProviderAvailabilityRouteImport } from './routes/_authenticated/provider.availability'
 import { Route as AuthenticatedAdminRequestsRouteImport } from './routes/_authenticated/admin.requests'
 import { Route as AuthenticatedAdminQuestionnairesRouteImport } from './routes/_authenticated/admin.questionnaires'
 import { Route as AuthenticatedAdminProvidersRouteImport } from './routes/_authenticated/admin.providers'
@@ -102,6 +112,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlanChangeTokenRoute = PlanChangeTokenRouteImport.update({
+  id: '/plan-change/$token',
+  path: '/plan-change/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/callback',
   path: '/callback',
@@ -138,11 +153,44 @@ const AuthenticatedAdminIndexRoute = AuthenticatedAdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedAdminRoute,
 } as any)
+const ApiStripeWebhookRoute = ApiStripeWebhookRouteImport.update({
+  id: '/api/stripe/webhook',
+  path: '/api/stripe/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLifefileDataPushRoute = ApiLifefileDataPushRouteImport.update({
+  id: '/api/lifefile/data-push',
+  path: '/api/lifefile/data-push',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiInternalRemindersRoute = ApiInternalRemindersRouteImport.update({
+  id: '/api/internal/reminders',
+  path: '/api/internal/reminders',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiInternalPlanChangeAcceptedRoute =
+  ApiInternalPlanChangeAcceptedRouteImport.update({
+    id: '/api/internal/plan-change-accepted',
+    path: '/api/internal/plan-change-accepted',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiInternalNewFeedbackRoute = ApiInternalNewFeedbackRouteImport.update({
   id: '/api/internal/new-feedback',
   path: '/api/internal/new-feedback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiInternalAdditionalPaymentPaidRoute =
+  ApiInternalAdditionalPaymentPaidRouteImport.update({
+    id: '/api/internal/additional-payment-paid',
+    path: '/api/internal/additional-payment-paid',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiInternalAdditionalPaymentDeclinedRoute =
+  ApiInternalAdditionalPaymentDeclinedRouteImport.update({
+    id: '/api/internal/additional-payment-declined',
+    path: '/api/internal/additional-payment-declined',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiConsultationsEmbedRoute = ApiConsultationsEmbedRouteImport.update({
   id: '/api/consultations/embed',
   path: '/api/consultations/embed',
@@ -166,10 +214,28 @@ const AuthenticatedProviderProfileRoute =
     path: '/profile',
     getParentRoute: () => AuthenticatedProviderRoute,
   } as any)
+const AuthenticatedProviderPayoutsRoute =
+  AuthenticatedProviderPayoutsRouteImport.update({
+    id: '/payouts',
+    path: '/payouts',
+    getParentRoute: () => AuthenticatedProviderRoute,
+  } as any)
 const AuthenticatedProviderNotificationsRoute =
   AuthenticatedProviderNotificationsRouteImport.update({
     id: '/notifications',
     path: '/notifications',
+    getParentRoute: () => AuthenticatedProviderRoute,
+  } as any)
+const AuthenticatedProviderHelpRoute =
+  AuthenticatedProviderHelpRouteImport.update({
+    id: '/help',
+    path: '/help',
+    getParentRoute: () => AuthenticatedProviderRoute,
+  } as any)
+const AuthenticatedProviderAvailabilityRoute =
+  AuthenticatedProviderAvailabilityRouteImport.update({
+    id: '/availability',
+    path: '/availability',
     getParentRoute: () => AuthenticatedProviderRoute,
   } as any)
 const AuthenticatedAdminRequestsRoute =
@@ -483,6 +549,7 @@ export interface FileRoutesByFullPath {
   '/provider': typeof AuthenticatedProviderRouteWithChildren
   '/appointment/$': typeof AppointmentSplatRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/plan-change/$token': typeof PlanChangeTokenRoute
   '/admin/billing': typeof AuthenticatedAdminBillingRouteWithChildren
   '/admin/categories': typeof AuthenticatedAdminCategoriesRouteWithChildren
   '/admin/intake-sessions': typeof AuthenticatedAdminIntakeSessionsRouteWithChildren
@@ -495,12 +562,21 @@ export interface FileRoutesByFullPath {
   '/admin/providers': typeof AuthenticatedAdminProvidersRouteWithChildren
   '/admin/questionnaires': typeof AuthenticatedAdminQuestionnairesRouteWithChildren
   '/admin/requests': typeof AuthenticatedAdminRequestsRouteWithChildren
+  '/provider/availability': typeof AuthenticatedProviderAvailabilityRoute
+  '/provider/help': typeof AuthenticatedProviderHelpRoute
   '/provider/notifications': typeof AuthenticatedProviderNotificationsRoute
+  '/provider/payouts': typeof AuthenticatedProviderPayoutsRoute
   '/provider/profile': typeof AuthenticatedProviderProfileRoute
   '/provider/queue': typeof AuthenticatedProviderQueueRoute
   '/rx/$prescriptionId': typeof AuthenticatedRxPrescriptionIdRoute
   '/api/consultations/embed': typeof ApiConsultationsEmbedRoute
+  '/api/internal/additional-payment-declined': typeof ApiInternalAdditionalPaymentDeclinedRoute
+  '/api/internal/additional-payment-paid': typeof ApiInternalAdditionalPaymentPaidRoute
   '/api/internal/new-feedback': typeof ApiInternalNewFeedbackRoute
+  '/api/internal/plan-change-accepted': typeof ApiInternalPlanChangeAcceptedRoute
+  '/api/internal/reminders': typeof ApiInternalRemindersRoute
+  '/api/lifefile/data-push': typeof ApiLifefileDataPushRoute
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/admin/': typeof AuthenticatedAdminIndexRoute
   '/provider/': typeof AuthenticatedProviderIndexRoute
   '/admin/billing/refund-history': typeof AuthenticatedAdminBillingRefundHistoryRoute
@@ -550,13 +626,23 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/appointment/$': typeof AppointmentSplatRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/plan-change/$token': typeof PlanChangeTokenRoute
   '/admin/lifefile-pharmacies': typeof AuthenticatedAdminLifefilePharmaciesRoute
+  '/provider/availability': typeof AuthenticatedProviderAvailabilityRoute
+  '/provider/help': typeof AuthenticatedProviderHelpRoute
   '/provider/notifications': typeof AuthenticatedProviderNotificationsRoute
+  '/provider/payouts': typeof AuthenticatedProviderPayoutsRoute
   '/provider/profile': typeof AuthenticatedProviderProfileRoute
   '/provider/queue': typeof AuthenticatedProviderQueueRoute
   '/rx/$prescriptionId': typeof AuthenticatedRxPrescriptionIdRoute
   '/api/consultations/embed': typeof ApiConsultationsEmbedRoute
+  '/api/internal/additional-payment-declined': typeof ApiInternalAdditionalPaymentDeclinedRoute
+  '/api/internal/additional-payment-paid': typeof ApiInternalAdditionalPaymentPaidRoute
   '/api/internal/new-feedback': typeof ApiInternalNewFeedbackRoute
+  '/api/internal/plan-change-accepted': typeof ApiInternalPlanChangeAcceptedRoute
+  '/api/internal/reminders': typeof ApiInternalRemindersRoute
+  '/api/lifefile/data-push': typeof ApiLifefileDataPushRoute
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/admin': typeof AuthenticatedAdminIndexRoute
   '/provider': typeof AuthenticatedProviderIndexRoute
   '/admin/billing/refund-history': typeof AuthenticatedAdminBillingRefundHistoryRoute
@@ -610,6 +696,7 @@ export interface FileRoutesById {
   '/_authenticated/provider': typeof AuthenticatedProviderRouteWithChildren
   '/appointment/$': typeof AppointmentSplatRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/plan-change/$token': typeof PlanChangeTokenRoute
   '/_authenticated/admin/billing': typeof AuthenticatedAdminBillingRouteWithChildren
   '/_authenticated/admin/categories': typeof AuthenticatedAdminCategoriesRouteWithChildren
   '/_authenticated/admin/intake-sessions': typeof AuthenticatedAdminIntakeSessionsRouteWithChildren
@@ -622,12 +709,21 @@ export interface FileRoutesById {
   '/_authenticated/admin/providers': typeof AuthenticatedAdminProvidersRouteWithChildren
   '/_authenticated/admin/questionnaires': typeof AuthenticatedAdminQuestionnairesRouteWithChildren
   '/_authenticated/admin/requests': typeof AuthenticatedAdminRequestsRouteWithChildren
+  '/_authenticated/provider/availability': typeof AuthenticatedProviderAvailabilityRoute
+  '/_authenticated/provider/help': typeof AuthenticatedProviderHelpRoute
   '/_authenticated/provider/notifications': typeof AuthenticatedProviderNotificationsRoute
+  '/_authenticated/provider/payouts': typeof AuthenticatedProviderPayoutsRoute
   '/_authenticated/provider/profile': typeof AuthenticatedProviderProfileRoute
   '/_authenticated/provider/queue': typeof AuthenticatedProviderQueueRoute
   '/_authenticated/rx/$prescriptionId': typeof AuthenticatedRxPrescriptionIdRoute
   '/api/consultations/embed': typeof ApiConsultationsEmbedRoute
+  '/api/internal/additional-payment-declined': typeof ApiInternalAdditionalPaymentDeclinedRoute
+  '/api/internal/additional-payment-paid': typeof ApiInternalAdditionalPaymentPaidRoute
   '/api/internal/new-feedback': typeof ApiInternalNewFeedbackRoute
+  '/api/internal/plan-change-accepted': typeof ApiInternalPlanChangeAcceptedRoute
+  '/api/internal/reminders': typeof ApiInternalRemindersRoute
+  '/api/lifefile/data-push': typeof ApiLifefileDataPushRoute
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/_authenticated/admin/': typeof AuthenticatedAdminIndexRoute
   '/_authenticated/provider/': typeof AuthenticatedProviderIndexRoute
   '/_authenticated/admin/billing/refund-history': typeof AuthenticatedAdminBillingRefundHistoryRoute
@@ -681,6 +777,7 @@ export interface FileRouteTypes {
     | '/provider'
     | '/appointment/$'
     | '/auth/callback'
+    | '/plan-change/$token'
     | '/admin/billing'
     | '/admin/categories'
     | '/admin/intake-sessions'
@@ -693,12 +790,21 @@ export interface FileRouteTypes {
     | '/admin/providers'
     | '/admin/questionnaires'
     | '/admin/requests'
+    | '/provider/availability'
+    | '/provider/help'
     | '/provider/notifications'
+    | '/provider/payouts'
     | '/provider/profile'
     | '/provider/queue'
     | '/rx/$prescriptionId'
     | '/api/consultations/embed'
+    | '/api/internal/additional-payment-declined'
+    | '/api/internal/additional-payment-paid'
     | '/api/internal/new-feedback'
+    | '/api/internal/plan-change-accepted'
+    | '/api/internal/reminders'
+    | '/api/lifefile/data-push'
+    | '/api/stripe/webhook'
     | '/admin/'
     | '/provider/'
     | '/admin/billing/refund-history'
@@ -748,13 +854,23 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/appointment/$'
     | '/auth/callback'
+    | '/plan-change/$token'
     | '/admin/lifefile-pharmacies'
+    | '/provider/availability'
+    | '/provider/help'
     | '/provider/notifications'
+    | '/provider/payouts'
     | '/provider/profile'
     | '/provider/queue'
     | '/rx/$prescriptionId'
     | '/api/consultations/embed'
+    | '/api/internal/additional-payment-declined'
+    | '/api/internal/additional-payment-paid'
     | '/api/internal/new-feedback'
+    | '/api/internal/plan-change-accepted'
+    | '/api/internal/reminders'
+    | '/api/lifefile/data-push'
+    | '/api/stripe/webhook'
     | '/admin'
     | '/provider'
     | '/admin/billing/refund-history'
@@ -807,6 +923,7 @@ export interface FileRouteTypes {
     | '/_authenticated/provider'
     | '/appointment/$'
     | '/auth/callback'
+    | '/plan-change/$token'
     | '/_authenticated/admin/billing'
     | '/_authenticated/admin/categories'
     | '/_authenticated/admin/intake-sessions'
@@ -819,12 +936,21 @@ export interface FileRouteTypes {
     | '/_authenticated/admin/providers'
     | '/_authenticated/admin/questionnaires'
     | '/_authenticated/admin/requests'
+    | '/_authenticated/provider/availability'
+    | '/_authenticated/provider/help'
     | '/_authenticated/provider/notifications'
+    | '/_authenticated/provider/payouts'
     | '/_authenticated/provider/profile'
     | '/_authenticated/provider/queue'
     | '/_authenticated/rx/$prescriptionId'
     | '/api/consultations/embed'
+    | '/api/internal/additional-payment-declined'
+    | '/api/internal/additional-payment-paid'
     | '/api/internal/new-feedback'
+    | '/api/internal/plan-change-accepted'
+    | '/api/internal/reminders'
+    | '/api/lifefile/data-push'
+    | '/api/stripe/webhook'
     | '/_authenticated/admin/'
     | '/_authenticated/provider/'
     | '/_authenticated/admin/billing/refund-history'
@@ -874,8 +1000,15 @@ export interface RootRouteChildren {
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   AppointmentSplatRoute: typeof AppointmentSplatRoute
+  PlanChangeTokenRoute: typeof PlanChangeTokenRoute
   ApiConsultationsEmbedRoute: typeof ApiConsultationsEmbedRoute
+  ApiInternalAdditionalPaymentDeclinedRoute: typeof ApiInternalAdditionalPaymentDeclinedRoute
+  ApiInternalAdditionalPaymentPaidRoute: typeof ApiInternalAdditionalPaymentPaidRoute
   ApiInternalNewFeedbackRoute: typeof ApiInternalNewFeedbackRoute
+  ApiInternalPlanChangeAcceptedRoute: typeof ApiInternalPlanChangeAcceptedRoute
+  ApiInternalRemindersRoute: typeof ApiInternalRemindersRoute
+  ApiLifefileDataPushRoute: typeof ApiLifefileDataPushRoute
+  ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -913,6 +1046,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/plan-change/$token': {
+      id: '/plan-change/$token'
+      path: '/plan-change/$token'
+      fullPath: '/plan-change/$token'
+      preLoaderRoute: typeof PlanChangeTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth/callback': {
@@ -964,11 +1104,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminIndexRouteImport
       parentRoute: typeof AuthenticatedAdminRoute
     }
+    '/api/stripe/webhook': {
+      id: '/api/stripe/webhook'
+      path: '/api/stripe/webhook'
+      fullPath: '/api/stripe/webhook'
+      preLoaderRoute: typeof ApiStripeWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/lifefile/data-push': {
+      id: '/api/lifefile/data-push'
+      path: '/api/lifefile/data-push'
+      fullPath: '/api/lifefile/data-push'
+      preLoaderRoute: typeof ApiLifefileDataPushRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/internal/reminders': {
+      id: '/api/internal/reminders'
+      path: '/api/internal/reminders'
+      fullPath: '/api/internal/reminders'
+      preLoaderRoute: typeof ApiInternalRemindersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/internal/plan-change-accepted': {
+      id: '/api/internal/plan-change-accepted'
+      path: '/api/internal/plan-change-accepted'
+      fullPath: '/api/internal/plan-change-accepted'
+      preLoaderRoute: typeof ApiInternalPlanChangeAcceptedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/internal/new-feedback': {
       id: '/api/internal/new-feedback'
       path: '/api/internal/new-feedback'
       fullPath: '/api/internal/new-feedback'
       preLoaderRoute: typeof ApiInternalNewFeedbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/internal/additional-payment-paid': {
+      id: '/api/internal/additional-payment-paid'
+      path: '/api/internal/additional-payment-paid'
+      fullPath: '/api/internal/additional-payment-paid'
+      preLoaderRoute: typeof ApiInternalAdditionalPaymentPaidRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/internal/additional-payment-declined': {
+      id: '/api/internal/additional-payment-declined'
+      path: '/api/internal/additional-payment-declined'
+      fullPath: '/api/internal/additional-payment-declined'
+      preLoaderRoute: typeof ApiInternalAdditionalPaymentDeclinedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/consultations/embed': {
@@ -999,11 +1181,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProviderProfileRouteImport
       parentRoute: typeof AuthenticatedProviderRoute
     }
+    '/_authenticated/provider/payouts': {
+      id: '/_authenticated/provider/payouts'
+      path: '/payouts'
+      fullPath: '/provider/payouts'
+      preLoaderRoute: typeof AuthenticatedProviderPayoutsRouteImport
+      parentRoute: typeof AuthenticatedProviderRoute
+    }
     '/_authenticated/provider/notifications': {
       id: '/_authenticated/provider/notifications'
       path: '/notifications'
       fullPath: '/provider/notifications'
       preLoaderRoute: typeof AuthenticatedProviderNotificationsRouteImport
+      parentRoute: typeof AuthenticatedProviderRoute
+    }
+    '/_authenticated/provider/help': {
+      id: '/_authenticated/provider/help'
+      path: '/help'
+      fullPath: '/provider/help'
+      preLoaderRoute: typeof AuthenticatedProviderHelpRouteImport
+      parentRoute: typeof AuthenticatedProviderRoute
+    }
+    '/_authenticated/provider/availability': {
+      id: '/_authenticated/provider/availability'
+      path: '/availability'
+      fullPath: '/provider/availability'
+      preLoaderRoute: typeof AuthenticatedProviderAvailabilityRouteImport
       parentRoute: typeof AuthenticatedProviderRoute
     }
     '/_authenticated/admin/requests': {
@@ -1644,7 +1847,10 @@ const AuthenticatedProviderRequestsRequestIdRouteWithChildren =
   )
 
 interface AuthenticatedProviderRouteChildren {
+  AuthenticatedProviderAvailabilityRoute: typeof AuthenticatedProviderAvailabilityRoute
+  AuthenticatedProviderHelpRoute: typeof AuthenticatedProviderHelpRoute
   AuthenticatedProviderNotificationsRoute: typeof AuthenticatedProviderNotificationsRoute
+  AuthenticatedProviderPayoutsRoute: typeof AuthenticatedProviderPayoutsRoute
   AuthenticatedProviderProfileRoute: typeof AuthenticatedProviderProfileRoute
   AuthenticatedProviderQueueRoute: typeof AuthenticatedProviderQueueRoute
   AuthenticatedProviderIndexRoute: typeof AuthenticatedProviderIndexRoute
@@ -1656,8 +1862,12 @@ interface AuthenticatedProviderRouteChildren {
 }
 
 const AuthenticatedProviderRouteChildren: AuthenticatedProviderRouteChildren = {
+  AuthenticatedProviderAvailabilityRoute:
+    AuthenticatedProviderAvailabilityRoute,
+  AuthenticatedProviderHelpRoute: AuthenticatedProviderHelpRoute,
   AuthenticatedProviderNotificationsRoute:
     AuthenticatedProviderNotificationsRoute,
+  AuthenticatedProviderPayoutsRoute: AuthenticatedProviderPayoutsRoute,
   AuthenticatedProviderProfileRoute: AuthenticatedProviderProfileRoute,
   AuthenticatedProviderQueueRoute: AuthenticatedProviderQueueRoute,
   AuthenticatedProviderIndexRoute: AuthenticatedProviderIndexRoute,
@@ -1712,8 +1922,16 @@ const rootRouteChildren: RootRouteChildren = {
   ForgotPasswordRoute: ForgotPasswordRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   AppointmentSplatRoute: AppointmentSplatRoute,
+  PlanChangeTokenRoute: PlanChangeTokenRoute,
   ApiConsultationsEmbedRoute: ApiConsultationsEmbedRoute,
+  ApiInternalAdditionalPaymentDeclinedRoute:
+    ApiInternalAdditionalPaymentDeclinedRoute,
+  ApiInternalAdditionalPaymentPaidRoute: ApiInternalAdditionalPaymentPaidRoute,
   ApiInternalNewFeedbackRoute: ApiInternalNewFeedbackRoute,
+  ApiInternalPlanChangeAcceptedRoute: ApiInternalPlanChangeAcceptedRoute,
+  ApiInternalRemindersRoute: ApiInternalRemindersRoute,
+  ApiLifefileDataPushRoute: ApiLifefileDataPushRoute,
+  ApiStripeWebhookRoute: ApiStripeWebhookRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -57,7 +57,7 @@ export async function createRelationship(input: {
 }
 
 export async function deleteRelationship(id: string): Promise<{ ok: true }> {
-  const { error } = await supabase.from("medication_relationships").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  const { deleteStoredRecord } = await import("@/lib/catalog-deletes.functions");
+  await deleteStoredRecord({ data: { kind: "relationship", id } });
   return { ok: true };
 }

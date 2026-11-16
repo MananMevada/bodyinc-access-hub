@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
+import { FieldError, RequiredMark } from "@/components/admin/required-mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +17,7 @@ import { AvatarUpload } from "@/components/admin/avatar-upload";
 import {
   adminCard,
   adminInput,
+  adminInputError,
   adminPageTitle,
   adminPageSubtitle,
   adminSectionTitle,
@@ -51,6 +53,7 @@ function ProviderProfilePage() {
   });
   const [licenseStates, setLicenseStates] = useState<string[]>([]);
   const [avatarUrl, setAvatarUrl] = useState("");
+  const [nameError, setNameError] = useState("");
 
   useEffect(() => {
     const d = q.data as any;
@@ -120,12 +123,19 @@ function ProviderProfilePage() {
             <AvatarUpload value={avatarUrl || null} onChange={setAvatarUrl} disabled={mut.isPending} />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-[13px] text-[#3B4759]">Full name</Label>
+            <Label className="text-[13px] text-[#3B4759]">
+              Full name
+              <RequiredMark />
+            </Label>
             <Input
               value={form.full_name}
-              onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-              className={adminInput}
+              onChange={(e) => {
+                setForm({ ...form, full_name: e.target.value });
+                if (e.target.value.trim().length >= 2) setNameError("");
+              }}
+              className={`${adminInput} ${nameError ? adminInputError : ""}`}
             />
+            <FieldError message={nameError} />
           </div>
           <div className="space-y-1.5">
             <Label className="text-[13px] text-[#3B4759]">Credentials</Label>
@@ -183,8 +193,15 @@ function ProviderProfilePage() {
           </div>
           <div className="sm:col-span-2">
             <Button
-              disabled={mut.isPending || form.full_name.trim().length < 2}
-              onClick={() => mut.mutate()}
+              disabled={mut.isPending}
+              onClick={() => {
+                if (form.full_name.trim().length < 2) {
+                  setNameError("Please enter the full name.");
+                  return;
+                }
+                setNameError("");
+                mut.mutate();
+              }}
               className="h-10 bg-[#6A9B9C] px-5 text-[13px] font-semibold text-white hover:bg-[#5B8788]"
             >
               {mut.isPending ? "Saving…" : "Save changes"}
@@ -217,7 +234,13 @@ function ProviderProfilePage() {
           </div>
           <Button
             disabled={mut.isPending}
-            onClick={() => mut.mutate()}
+            onClick={() => {
+              if (form.full_name.trim().length < 2) {
+                setNameError("Please enter the full name.");
+                return;
+              }
+              mut.mutate();
+            }}
             className="h-10 bg-[#6A9B9C] px-5 text-[13px] font-semibold text-white hover:bg-[#5B8788]"
           >
             {mut.isPending ? "Saving…" : "Save licensing"}

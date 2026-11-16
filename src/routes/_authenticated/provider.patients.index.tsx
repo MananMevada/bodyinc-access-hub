@@ -17,6 +17,7 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { listMyPatients } from "@/lib/provider.functions";
 import { requestStatusTone, REQUEST_STATUS_BADGE, clinicalStatusLabel } from "@/lib/request-status";
 import { adminPageTitle, adminPageSubtitle, adminInput } from "@/lib/admin-ui";
+import { formatDate, formatRecordId } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/provider/patients/")({
   head: () => ({
@@ -47,7 +48,8 @@ function ProviderPatientsPage() {
       <div className="space-y-1">
         <h1 className={adminPageTitle}>My patients</h1>
         <p className={adminPageSubtitle}>
-          Patients with orders assigned to you. Clinical details only — no contact or billing data.
+          Everyone assigned to you, including finished orders. This is a directory. To approve, prescribe,
+          or join a consultation, open the order from My Requests.
         </p>
       </div>
 
@@ -66,7 +68,8 @@ function ProviderPatientsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Patient</TableHead>
-              <TableHead>Age / sex</TableHead>
+              <TableHead>Patient ID</TableHead>
+              <TableHead>Date of birth</TableHead>
               <TableHead>State</TableHead>
               <TableHead>Latest medication</TableHead>
               <TableHead>Latest status</TableHead>
@@ -76,13 +79,13 @@ function ProviderPatientsPage() {
           <TableBody>
             {q.isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-[14px] text-[#3B4759]/60">
+                <TableCell colSpan={7} className="py-8 text-center text-[14px] text-[#3B4759]/60">
                   Loading…
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-[14px] text-[#3B4759]/60">
+                <TableCell colSpan={7} className="py-8 text-center text-[14px] text-[#3B4759]/60">
                   No patients assigned to you yet.
                 </TableCell>
               </TableRow>
@@ -104,8 +107,11 @@ function ProviderPatientsPage() {
                       <span className="ml-2 text-[12px] text-[#3B4759]/50">guest</span>
                     ) : null}
                   </TableCell>
+                  <TableCell className="font-mono text-[13px] text-[#3B4759]/80">
+                    {p.patient_id ? formatRecordId(p.patient_id) : "—"}
+                  </TableCell>
                   <TableCell className="text-[#3B4759]/80">
-                    {p.age ?? "—"} / {p.sex ?? "—"}
+                    {p.dob ? formatDate(p.dob) : "—"}
                   </TableCell>
                   <TableCell className="text-[#3B4759]/80">{p.state_code ?? "—"}</TableCell>
                   <TableCell className="text-[#3B4759]/80">{p.latest_medicine}</TableCell>
@@ -118,7 +124,11 @@ function ProviderPatientsPage() {
                       {clinicalStatusLabel(p.latest_status)}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right text-[#3B4759]/80">{p.order_count}</TableCell>
+                  <TableCell className="text-right">
+                    <span className="text-[13px] font-semibold text-[#6A9B9C]">
+                      {p.order_count} order{p.order_count === 1 ? "" : "s"}
+                    </span>
+                  </TableCell>
                 </TableRow>
               ))
             )}

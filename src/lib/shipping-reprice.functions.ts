@@ -52,7 +52,7 @@ function isShippingPrice(price: ShippingItemPrice): boolean {
 
 export const syncShippingBatch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => batchInput.parse(input ?? {}))
+  .validator((input: unknown) => batchInput.parse(input ?? {}))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

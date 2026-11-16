@@ -21,6 +21,7 @@ import {
 } from "@/lib/consultations/quickblox";
 import { sessionForBodyIncProvider } from "@/lib/consultations/provider-agent";
 import { ageFromDob, bmiFrom } from "@/lib/format";
+import { findGroupConsultation, loadOrderLines, loadSiblingRows } from "@/lib/order-groups";
 
 export type ConsultationVisitStatus = "open" | "ended" | "unknown";
 
@@ -251,7 +252,7 @@ export const countPendingConsultations = createServerFn({ method: "POST" })
 
 export const listConsultations = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => listInput.parse(input ?? {}))
+  .validator((input: unknown) => listInput.parse(input ?? {}))
   .handler(async ({ data, context }): Promise<ListConsultationsResult> => {
     const role = await assertReviewer(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -437,7 +438,7 @@ export const listConsultations = createServerFn({ method: "POST" })
 
 export const openConsultation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => openInput.parse(input))
+  .validator((input: unknown) => openInput.parse(input))
   .handler(async ({ data, context }): Promise<OpenConsultationResult> => {
     const role = await assertReviewer(context);
     if (!isQuickbloxConfigured()) {
@@ -460,7 +461,13 @@ export const openConsultation = createServerFn({ method: "POST" })
 
     if (role === "provider") {
       const ids = await assignedPatientIds(supabaseAdmin, context.userId);
-      if (!ids.includes(row.user_id)) return { ok: false, message: "Forbidden" };
+      if (!ids.includes(row.user_id)) {
+        return {
+          ok: false,
+          message:
+            "Claim this patient's order first. Open Unassigned Queue, claim the order, then join the consultation.",
+        };
+      }
     }
 
     // Resolve associated medication request ID for native SDK consultation room routing
@@ -507,7 +514,7 @@ export const openConsultation = createServerFn({ method: "POST" })
 
 export const startRequestConsultation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => startFromRequestInput.parse(input))
+  .validator((input: unknown) => startFromRequestInput.parse(input))
   .handler(async ({ data, context }): Promise<OpenConsultationResult> => {
     const role = await assertReviewer(context);
     if (!isQuickbloxConfigured()) {
@@ -523,7 +530,12 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
     if (error) return { ok: false, message: error.message };
     if (!req) return { ok: false, message: "Request not found." };
     if (role === "provider" && req.provider_id !== context.userId) {
-      return { ok: false, message: "Forbidden" };
+      return {
+        ok: false,
+        message: req.provider_id
+          ? "This order belongs to another provider. Only the assigned provider can join this consultation."
+          : "Claim this order first. Open Unassigned Queue, claim the order, then join the consultation.",
+      };
     }
     if (!req.user_id) {
       return {
@@ -534,15 +546,29 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
     if (!req.subscription_id) {
       return { ok: false, message: "This order is missing a subscription." };
     }
+    const { loadShopIntakeState, orderHasIntake, shopIntakeReady } = await import("@/lib/clinical-intake");
+    const shopIntake = await loadShopIntakeState(supabaseAdmin, [req.id]);
+    const intakeReady = shopIntake.shopIds.has(req.id)
+      ? shopIntakeReady(shopIntake.byRequest.get(req.id))
+      : await orderHasIntake(supabaseAdmin, req.session_id, req.user_id);
+    if (!intakeReady) {
+      return { ok: false, message: "The patient has not finished the intake form yet." };
+    }
 
-    const { data: existingRows, error: existingError } = await supabaseAdmin
-      .from("patient_consultations")
-      .select("id, qb_appointment_id, qb_dialog_id, started_at")
-      .eq("subscription_id", req.subscription_id)
-      .eq("user_id", req.user_id)
-      .order("started_at", { ascending: true });
-    if (existingError) return { ok: false, message: existingError.message };
-    const existing = (existingRows ?? []).find((row) => row.qb_appointment_id) ?? null;
+    const siblings = await loadSiblingRows(supabaseAdmin, req.id);
+    const orderLines = await loadOrderLines(supabaseAdmin, req.id);
+    let existing: any = null;
+    try {
+      existing = await findGroupConsultation(
+        supabaseAdmin,
+        siblings.length ? siblings : [req],
+      );
+    } catch (lookupError) {
+      return {
+        ok: false,
+        message: lookupError instanceof Error ? lookupError.message : "Unable to load this consultation.",
+      };
+    }
     const storedId = existing?.qb_appointment_id ?? null;
 
     try {
@@ -606,7 +632,10 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
       }
 
       const fullName = profile?.full_name?.trim() || intake?.full_name?.trim() || "Patient";
-      const medicineName = medicine?.name?.trim() || "treatment";
+      const medicineName =
+        orderLines.map((line) => line.medicine_name).filter((name) => name && name !== "—").join(", ") ||
+        medicine?.name?.trim() ||
+        "treatment";
       const client = await ensurePatientQuickbloxClient({
         userId: req.user_id,
         subscriptionId: req.subscription_id,
@@ -676,13 +705,16 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
         }
       }
 
-      await supabaseAdmin.from("medication_request_events").insert({
-        request_id: req.id,
-        status: req.status,
-        actor_role: role,
-        created_by: context.userId,
-        note: "Consultation started",
-      });
+      const visitRows = siblings.length ? siblings : [req];
+      await supabaseAdmin.from("medication_request_events").insert(
+        visitRows.map((row) => ({
+          request_id: row.id,
+          status: row.status,
+          actor_role: role,
+          created_by: context.userId,
+          note: "Consultation started",
+        })),
+      );
 
       try {
         const { notifyUserById } = await import("@/lib/email.notifications");
@@ -733,6 +765,39 @@ export type LiveQueueItem = {
   providerName?: string | null;
   isAssigned?: boolean;
 };
+
+function collapseLiveQueue(items: LiveQueueItem[]): LiveQueueItem[] {
+  const byPatient = new Map<string, LiveQueueItem>();
+  for (const item of items) {
+    const key = item.clientId
+      ? `c:${item.clientId}`
+      : item.requestId
+        ? `r:${item.requestId}`
+        : item.appointmentId;
+    const prev = byPatient.get(key);
+    if (!prev || Math.abs(item.createdAt - prev.createdAt) > 10 * 60 * 1000) {
+      if (!prev) byPatient.set(key, item);
+      else byPatient.set(`${key}:${item.appointmentId}`, item);
+      continue;
+    }
+    const keep =
+      item.isActiveCurrent && !prev.isActiveCurrent
+        ? item
+        : prev.isActiveCurrent
+          ? prev
+          : !item.isEnded && prev.isEnded
+            ? item
+            : prev;
+    const other = keep === item ? prev : item;
+    const names = [...new Set([keep.medicineName, other.medicineName].filter(Boolean))] as string[];
+    byPatient.set(key, {
+      ...keep,
+      medicineName: names.join(", ") || keep.medicineName,
+      description: names.length > 1 ? `${names.join(", ")} consultation` : keep.description,
+    });
+  }
+  return [...byPatient.values()];
+}
 
 export type PatientConsultationHistoryItem = {
   id: string;
@@ -803,6 +868,25 @@ export type ConsultationRoomData = {
     startedAt: string;
     endedAt: string | null;
   }>;
+  pastOrders?: Array<{
+    id: string;
+    medicine_name: string;
+    kind: string | null;
+    status: string;
+    created_at: string;
+    notes: { id: string; body: string; created_at: string }[];
+  }>;
+  orderItems: Array<{
+    id: string;
+    medicine_id: string | null;
+    medicine_name: string;
+    variant_id: string | null;
+    package_id: string | null;
+    plan_name: string | null;
+    status: string;
+    provider_id: string | null;
+    requires_consultation: boolean;
+  }>;
   medicine: {
     id: string;
     name: string;
@@ -849,7 +933,7 @@ export type ConsultationRoomData = {
 
 export const getConsultationRoomDetails = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
   .handler(
     async ({
       data,
@@ -872,23 +956,24 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
       if (reqErr) return { ok: false, message: reqErr.message };
       if (!req) return { ok: false, message: "Medication request not found." };
       if (role === "provider" && req.provider_id !== context.userId) {
-        return { ok: false, message: "Forbidden: You are not assigned to this consultation." };
+        return {
+          ok: false,
+          message: req.provider_id
+            ? "This order belongs to another provider. Only the assigned provider can join this consultation."
+            : "Claim this order first. Open Unassigned Queue, claim the order, then join the consultation.",
+        };
       }
 
-      // Retrieve or provision QuickBlox consultation
+      const orderItems = await loadOrderLines(supabaseAdmin, req.id);
+      const groupSiblings = await loadSiblingRows(supabaseAdmin, req.id);
       let existingConsultation: any = null;
-      if (req.subscription_id || req.user_id) {
-        let q = supabaseAdmin
-          .from("patient_consultations")
-          .select("id, qb_appointment_id, qb_user_id, qb_dialog_id, started_at, created_at")
-          .order("started_at", { ascending: false });
-        if (req.subscription_id) {
-          q = q.eq("subscription_id", req.subscription_id);
-        } else if (req.user_id) {
-          q = q.eq("user_id", req.user_id);
-        }
-        const { data: rows } = await q;
-        existingConsultation = rows?.[0] ?? null;
+      try {
+        existingConsultation = await findGroupConsultation(
+          supabaseAdmin,
+          groupSiblings.length ? groupSiblings : [req],
+        );
+      } catch (lookupError) {
+        console.warn("[consultations] group lookup failed:", lookupError);
       }
 
       const reviewerSession = await reviewerQuickbloxSession(role, context.userId, supabaseAdmin);
@@ -910,6 +995,13 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
       // Effective session: ALWAYS use the authentic logged-in reviewer's session (Admin is Admin, Doctor is Doctor)
       const session = reviewerSession;
 
+      // A shop order only shows the form for this purchase, never an earlier intake.
+      const { loadShopIntakeState } = await import("@/lib/clinical-intake");
+      const shopIntake = await loadShopIntakeState(supabaseAdmin, [req.id]);
+      const displaySessionId = shopIntake.shopIds.has(req.id)
+        ? (shopIntake.byRequest.get(req.id)?.finishedSessionId ?? null)
+        : req.session_id;
+
       // Load Patient Profile and Intake Session
       const [
         { data: profile },
@@ -925,13 +1017,13 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
               .eq("id", req.user_id)
               .maybeSingle()
           : Promise.resolve({ data: null }),
-        req.session_id
+        displaySessionId
           ? supabaseAdmin
               .from("intake_sessions")
               .select("id, full_name, email, dob, sex, phone, state_code, height_cm, weight_kg")
-              .eq("id", req.session_id)
+              .eq("id", displaySessionId)
               .maybeSingle()
-          : req.user_id
+          : !shopIntake.shopIds.has(req.id) && req.user_id
             ? supabaseAdmin
                 .from("intake_sessions")
                 .select("id, full_name, email, dob, sex, phone, state_code, height_cm, weight_kg")
@@ -967,7 +1059,13 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
       const dobRaw = patientSource?.dob ?? orderSession?.dob ?? null;
       const dob = dobRaw ? String(dobRaw).slice(0, 10) : null;
       const fullName = patientSource?.full_name?.trim() || "Patient";
-      const medicineName = medRow?.name?.trim() || "treatment";
+      const medicineName =
+        orderItems
+          .map((line) => line.medicine_name)
+          .filter((name) => name && name !== "—")
+          .join(", ") ||
+        medRow?.name?.trim() ||
+        "treatment";
 
       // Query QuickBlox appointments for this provider session to inspect the live queue and find active visit
       let providerAppts: QbAppointment[] = [];
@@ -1131,7 +1229,7 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
       }
 
       // Load Intake Session questionnaire responses & categories
-      const sessionId = orderSession?.id ?? req.session_id ?? null;
+      const sessionId = displaySessionId;
       let goals: string[] = [];
       let eligibility: Array<{
         medicine_name: string;
@@ -1600,6 +1698,10 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
         };
       });
 
+      const collapsedQueue = collapseLiveQueue(liveQueue);
+      liveQueue.length = 0;
+      liveQueue.push(...collapsedQueue);
+
       // Sort liveQueue: current item first, then open/in-queue items (newest first), then ended items
       liveQueue.sort((x, y) => {
         if (x.isActiveCurrent) return -1;
@@ -1698,6 +1800,15 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
             startedAt: c.started_at,
             endedAt: c.ended_at,
           })),
+          pastOrders: await (
+            await import("@/lib/clinical-intake")
+          ).loadPastOrders(supabaseAdmin, {
+            requestId: req.id,
+            userId: req.user_id,
+            sessionId: req.session_id,
+            excludeIds: orderItems.map((line) => line.id),
+          }),
+          orderItems,
           medicine: medRow ? { id: medRow.id, name: medRow.name } : null,
           package: pkgRow
             ? {
@@ -1749,7 +1860,7 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
 
 export const saveConsultationClinicalNote = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         requestId: z.string().uuid(),
@@ -1792,9 +1903,107 @@ export const saveConsultationClinicalNote = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+async function sendApprovedOrdersAfterConsult(
+  supabaseAdmin: any,
+  requestId: string,
+  role: "admin" | "provider",
+  userId: string,
+): Promise<{ message: string; error: string | null }> {
+  const siblings = await loadSiblingRows(supabaseAdmin, requestId);
+  const ids = [...new Set([requestId, ...siblings.map((row: { id: string }) => row.id)])];
+  const { data: rows, error } = await supabaseAdmin
+    .from("medication_requests")
+    .select(
+      "id, status, provider_id, user_id, medicine_id, variant_id, package_id, life_file_order_id, life_file_status, plan_change_delta_cents, plan_change_token",
+    )
+    .in("id", ids);
+  if (error) return { message: "Consultation finished.", error: error.message };
+
+  const autoSend = new Set([
+    "payment_completed",
+    "provider_assigned",
+    "pending_review",
+    "approved",
+    "prescribed",
+  ]);
+  const notYetSent = (row: { life_file_order_id?: string | null; life_file_status?: string | null }) =>
+    !row.life_file_order_id && row.life_file_status !== "submitting";
+  const ready = ((rows ?? []) as any[]).filter(
+    (row) => autoSend.has(row.status) && notYetSent(row),
+  );
+  const settledWithoutPayment = ((rows ?? []) as any[]).filter(
+    (row) =>
+      row.status === "awaiting_additional_payment" &&
+      Number(row.plan_change_delta_cents ?? 0) <= 0 &&
+      !row.plan_change_token &&
+      notYetSent(row),
+  );
+  if (!ready.length && !settledWithoutPayment.length) {
+    const waitingPay = ((rows ?? []) as any[]).some(
+      (row) =>
+        row.status === "awaiting_additional_payment" && Number(row.plan_change_delta_cents ?? 0) > 0,
+    );
+    const waitingConsent = ((rows ?? []) as any[]).some(
+      (row) => row.status === "awaiting_additional_payment" && row.plan_change_token,
+    );
+    return {
+      message: waitingPay
+        ? "Consultation finished. The pharmacy send waits until the patient pays the difference."
+        : waitingConsent
+          ? "Consultation finished. The pharmacy send waits until the patient approves the medicine change."
+          : "Consultation appointment completed successfully.",
+      error: null,
+    };
+  }
+
+  const { prescribeAndSendToPharmacy } = await import("@/lib/requests.functions");
+  const { confirmPlanChange } = await import("@/lib/plan-change.server");
+  const failures: string[] = [];
+  let sent = 0;
+  for (const row of settledWithoutPayment) {
+    const result = await confirmPlanChange(supabaseAdmin, row.id, "consult");
+    if (result.lifeFileOrderId) {
+      sent += 1;
+      continue;
+    }
+    if (result.error) failures.push(result.error);
+  }
+  for (const row of ready) {
+    const result = await prescribeAndSendToPharmacy(supabaseAdmin, row, { role, userId });
+    if (result.lifeFileOrderId) {
+      sent += 1;
+      continue;
+    }
+    if (result.error) {
+      console.error("[finishConsultationAppointment] automatic pharmacy send failed:", result.error);
+      failures.push(result.error);
+    }
+  }
+
+  if (failures.length && sent === 0) {
+    return {
+      message: "Consultation finished. The pharmacy send failed.",
+      error: failures[0],
+    };
+  }
+  if (failures.length) {
+    return {
+      message: `Consultation finished. ${sent} order${sent === 1 ? "" : "s"} sent to the pharmacy.`,
+      error: failures[0],
+    };
+  }
+  return {
+    message:
+      sent === 1
+        ? "Consultation finished. The order was prescribed and sent to the pharmacy."
+        : `Consultation finished. ${sent} orders were prescribed and sent to the pharmacy.`,
+    error: null,
+  };
+}
+
 export const finishConsultationAppointment = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         requestId: z.string().uuid(),
@@ -1802,7 +2011,7 @@ export const finishConsultationAppointment = createServerFn({ method: "POST" })
       })
       .parse(input),
   )
-  .handler(async ({ data, context }): Promise<{ ok: boolean; message: string }> => {
+  .handler(async ({ data, context }): Promise<{ ok: boolean; message: string; pharmacy_error?: string | null }> => {
     const role = await assertReviewer(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
@@ -1953,5 +2162,26 @@ export const finishConsultationAppointment = createServerFn({ method: "POST" })
       });
     }
 
-    return { ok: true, message: "Consultation appointment completed successfully." };
+    // If the patient already paid a medicine-change difference, send the updated order now.
+    try {
+      const { dispatchPaidAdditionalPaymentForRequest } = await import(
+        "@/lib/additional-payment-dispatch.server"
+      );
+      await dispatchPaidAdditionalPaymentForRequest(supabaseAdmin, data.requestId);
+    } catch (error) {
+      console.error("[finishConsultationAppointment] pharmacy dispatch failed:", error);
+    }
+
+    const pharmacy = await sendApprovedOrdersAfterConsult(
+      supabaseAdmin,
+      data.requestId,
+      role === "admin" ? "admin" : "provider",
+      context.userId,
+    );
+
+    return {
+      ok: true,
+      message: pharmacy.message,
+      pharmacy_error: pharmacy.error,
+    };
   });

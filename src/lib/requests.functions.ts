@@ -5,6 +5,26 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 import { assertReviewer, assertAdmin } from "@/lib/admin-guard";
 import { clinicalEventNote, PENDING_REQUEST_STATUSES } from "@/lib/request-status";
+import {
+  completedIntakeUserIds,
+  filledSessionIdSet,
+  intakeSessionForOrder,
+  loadClinicalIntake,
+  loadPastOrders,
+  loadShopIntakeState,
+  orderHasIntake,
+  repairOrdersAwaitingIntake,
+  shopIntakeReady,
+  withShopConsultationIntake,
+} from "@/lib/clinical-intake";
+import {
+  CLOSED_ORDER_STATUSES,
+  collapseOrderRows,
+  findGroupConsultation,
+  loadOrderLines,
+  loadSiblingRows,
+  userIdsInOpenChat,
+} from "@/lib/order-groups";
 
 type Ctx = { supabase: any; userId: string };
 
@@ -19,6 +39,37 @@ const OPEN_STATUSES = [
   "sent_to_pharmacy",
   "dispatched",
 ];
+
+/** The medicine switch is the current rule. The copy saved on the order can be older. */
+async function liveConsultationRequired(
+  supabaseAdmin: any,
+  rows: { medicine_id?: string | null; requires_consultation?: boolean | null }[],
+): Promise<boolean> {
+  const ids = [...new Set(rows.map((row) => row.medicine_id).filter(Boolean))] as string[];
+  if (ids.length === 0) return rows.some((row) => Boolean(row.requires_consultation));
+  const { data, error } = await supabaseAdmin
+    .from("medicines")
+    .select("id, requires_consultation")
+    .in("id", ids);
+  if (error || !data) return rows.some((row) => Boolean(row.requires_consultation));
+  const flags = new Map(
+    (data as { id: string; requires_consultation?: boolean }[]).map((med) => [
+      med.id,
+      Boolean(med.requires_consultation),
+    ]),
+  );
+  return rows.some((row) =>
+    row.medicine_id && flags.has(row.medicine_id)
+      ? flags.get(row.medicine_id)
+      : Boolean(row.requires_consultation),
+  );
+}
+
+function blockedLifeFileSend(message: string): "sent" | "in_flight" | null {
+  if (message.includes("already being sent to LifeFile")) return "in_flight";
+  if (message.includes("already submitted to LifeFile")) return "sent";
+  return null;
+}
 
 async function logEvent(
   supabaseAdmin: any,
@@ -38,12 +89,12 @@ async function logEvent(
 }
 
 /** Create the prescription if needed, submit to LifeFile, and mark the order sent. */
-async function fulfillApprovedRequest(
+export async function fulfillApprovedRequest(
   supabaseAdmin: any,
   req: {
     id: string;
     status: string;
-    provider_id: string;
+    provider_id: string | null;
     user_id: string | null;
     medicine_id: string | null;
     variant_id: string | null;
@@ -51,10 +102,10 @@ async function fulfillApprovedRequest(
     life_file_order_id?: string | null;
     life_file_status?: string | null;
   },
-  actor: { role: "admin" | "provider"; userId: string },
+  actor: { role: "admin" | "provider" | "system"; userId: string | null },
   directions?: string,
 ) {
-  if (req.life_file_order_id && req.life_file_status && req.life_file_status !== "failed") {
+  if (req.life_file_order_id) {
     throw new Error("This order was already submitted to LifeFile.");
   }
 
@@ -116,7 +167,8 @@ async function fulfillApprovedRequest(
       { allowRetry: true },
     );
   } catch (error) {
-    if (createdRxId) {
+    const message = error instanceof Error ? error.message : "";
+    if (createdRxId && !blockedLifeFileSend(message)) {
       await supabaseAdmin.from("prescriptions").delete().eq("id", createdRxId);
     }
     throw error;
@@ -150,6 +202,173 @@ async function fulfillApprovedRequest(
     lifeFileOrderId: lf.lifeFileOrderId as string,
     pharmacyName: lf.pharmacyName as string | null,
   };
+}
+
+const PHARMACY_HOLD_STATUSES = new Set([
+  "payment_completed",
+  "provider_assigned",
+  "pending_review",
+  "awaiting_additional_payment",
+  "approved",
+]);
+
+/** Prescribe if needed and submit to LifeFile. A failed send leaves the order at Prescription approved. */
+export async function prescribeAndSendToPharmacy(
+  supabaseAdmin: any,
+  req: {
+    id: string;
+    provider_id: string | null;
+    user_id: string | null;
+    medicine_id: string | null;
+    variant_id: string | null;
+    package_id?: string | null;
+  },
+  actor: { role: "admin" | "provider" | "system"; userId: string | null },
+): Promise<{ lifeFileOrderId: string | null; error: string | null; retry: boolean }> {
+  const { data: fresh, error: loadError } = await supabaseAdmin
+    .from("medication_requests")
+    .select(
+      "id, status, provider_id, user_id, medicine_id, variant_id, package_id, life_file_order_id, life_file_status",
+    )
+    .eq("id", req.id)
+    .maybeSingle();
+  if (loadError) return { lifeFileOrderId: null, error: loadError.message, retry: true };
+  const row = (fresh ?? req) as {
+    id: string;
+    status?: string;
+    provider_id: string | null;
+    user_id: string | null;
+    medicine_id: string | null;
+    variant_id: string | null;
+    package_id?: string | null;
+    life_file_order_id?: string | null;
+    life_file_status?: string | null;
+  };
+
+  if (row.life_file_order_id) {
+    if (row.status && !["sent_to_pharmacy", "dispatched", "delivered"].includes(row.status)) {
+      await supabaseAdmin
+        .from("medication_requests")
+        .update({ status: "sent_to_pharmacy", updated_at: new Date().toISOString() })
+        .eq("id", req.id);
+    }
+    return { lifeFileOrderId: row.life_file_order_id, error: null, retry: false };
+  }
+
+  const now = new Date().toISOString();
+  if (req.medicine_id) {
+    const { data: med } = await supabaseAdmin
+      .from("medicines")
+      .select("name")
+      .eq("id", req.medicine_id)
+      .maybeSingle();
+    await supabaseAdmin
+      .from("prescriptions")
+      .update({
+        medicine_id: req.medicine_id,
+        variant_id: req.variant_id,
+        package_id: req.package_id ?? null,
+        medicine_name: (med as { name?: string } | null)?.name ?? "Medication",
+        updated_at: now,
+      })
+      .eq("request_id", req.id)
+      .neq("status", "voided");
+  }
+
+  if (!row.status || PHARMACY_HOLD_STATUSES.has(row.status)) {
+    let statusUpdate = supabaseAdmin
+      .from("medication_requests")
+      .update({ status: "approved", updated_at: now })
+      .eq("id", req.id);
+    if (row.status) statusUpdate = statusUpdate.eq("status", row.status);
+    await statusUpdate;
+  }
+
+  if (!row.provider_id) {
+    await logEvent(
+      supabaseAdmin,
+      req.id,
+      "approved",
+      actor.role,
+      actor.userId,
+      "Automatic pharmacy send needs an assigned provider.",
+    );
+    return { lifeFileOrderId: null, error: "This order has no assigned provider.", retry: false };
+  }
+
+  try {
+    const sent = await fulfillApprovedRequest(
+      supabaseAdmin,
+      {
+        id: req.id,
+        status: "approved",
+        provider_id: row.provider_id,
+        user_id: row.user_id ?? req.user_id,
+        medicine_id: req.medicine_id ?? row.medicine_id,
+        variant_id: req.variant_id ?? row.variant_id,
+        package_id: req.package_id ?? row.package_id,
+        life_file_order_id: row.life_file_order_id,
+        life_file_status: row.life_file_status,
+      },
+      actor,
+    );
+    return { lifeFileOrderId: sent.lifeFileOrderId, error: null, retry: false };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Pharmacy send failed.";
+    const blocked = blockedLifeFileSend(message);
+    if (blocked === "in_flight") {
+      return { lifeFileOrderId: null, error: null, retry: true };
+    }
+    if (blocked === "sent") {
+      const { data: fresh } = await supabaseAdmin
+        .from("medication_requests")
+        .select("life_file_order_id, status")
+        .eq("id", req.id)
+        .maybeSingle();
+      const orderId =
+        (fresh as { life_file_order_id?: string | null } | null)?.life_file_order_id ??
+        row.life_file_order_id ??
+        null;
+      const freshStatus = (fresh as { status?: string } | null)?.status;
+      if (
+        orderId &&
+        freshStatus &&
+        !["sent_to_pharmacy", "dispatched", "delivered"].includes(freshStatus)
+      ) {
+        await supabaseAdmin
+          .from("medication_requests")
+          .update({ status: "sent_to_pharmacy", updated_at: new Date().toISOString() })
+          .eq("id", req.id)
+          .eq("status", freshStatus);
+      }
+      return { lifeFileOrderId: orderId, error: null, retry: false };
+    }
+    await supabaseAdmin
+      .from("medication_requests")
+      .update({ status: "approved", updated_at: new Date().toISOString() })
+      .eq("id", req.id)
+      .in("status", [
+        "payment_completed",
+        "provider_assigned",
+        "pending_review",
+        "awaiting_additional_payment",
+        "approved",
+        "prescribed",
+      ]);
+    await logEvent(
+      supabaseAdmin,
+      req.id,
+      "approved",
+      actor.role,
+      actor.userId,
+      `Pharmacy send did not go through: ${message}`.slice(0, 500),
+    );
+    const permanent =
+      /no assigned provider|no patient|patient profile not found|provider record not found|provider profile not found|npi is required|prescription not found/i.test(
+        message,
+      );
+    return { lifeFileOrderId: null, error: message, retry: !permanent };
+  }
 }
 
 // Loads a request and enforces provider scoping: a provider may only touch requests assigned to
@@ -215,16 +434,20 @@ const listInput = z
 
 export const listRequests = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => listInput.parse(input ?? {}))
+  .validator((input: unknown) => listInput.parse(input ?? {}))
   .handler(async ({ data, context }) => {
     const role = await assertReviewer(context as Ctx);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    if (role === "provider") {
+      const { expireOverduePlanChanges } = await import("@/lib/plan-change.server");
+      await expireOverduePlanChanges(supabaseAdmin, context.userId);
+    }
 
     const { normalizeIdSearch, uuidPrefixRange } = await import("@/lib/format");
     const term = data.search ? normalizeIdSearch(data.search) : "";
     const idRange = term ? uuidPrefixRange(term) : null;
     const SELECT_COLS =
-      "id, user_id, session_id, provider_id, medicine_id, package_id, kind, status, requires_consultation, tracking_number, created_at, life_file_status, life_file_order_id, life_file_error, life_file_pharmacy_id";
+      "id, user_id, session_id, subscription_id, provider_id, medicine_id, package_id, kind, status, requires_consultation, tracking_number, created_at, life_file_status, life_file_order_id, life_file_error, life_file_pharmacy_id, life_file_submitted_at, order_group_id, plan_change_delta_cents";
 
     let q = supabaseAdmin
       .from("medication_requests")
@@ -235,7 +458,14 @@ export const listRequests = createServerFn({ method: "POST" })
     if (role === "provider") q = q.eq("provider_id", context.userId);
 
     if (data.status && data.status !== "all") {
-      q = data.status === "open" ? q.in("status", OPEN_STATUSES) : q.eq("status", data.status);
+      q =
+        data.status === "open"
+          ? q.in("status", OPEN_STATUSES)
+          : data.status === "ready"
+            ? q.in("status", ["approved", "prescribed"])
+            : data.status === "sent_to_pharmacy"
+              ? q.in("status", ["sent_to_pharmacy", "dispatched", "delivered"])
+              : q.eq("status", data.status);
     }
 
     const { data: rows, error } = await q;
@@ -261,6 +491,8 @@ export const listRequests = createServerFn({ method: "POST" })
       );
     }
 
+    await repairOrdersAwaitingIntake(supabaseAdmin, list as any[]);
+
     const userIds = Array.from(new Set(list.map((r: any) => r.user_id).filter(Boolean)));
     const sessionIds = Array.from(
       new Set(
@@ -282,6 +514,7 @@ export const listRequests = createServerFn({ method: "POST" })
       { data: meds },
       { data: provs },
       { data: pharmacies },
+      shopIntake,
     ] = await Promise.all([
       userIds.length
         ? supabaseAdmin.from("profiles").select("id, full_name, email").in("id", userIds)
@@ -290,7 +523,10 @@ export const listRequests = createServerFn({ method: "POST" })
         ? supabaseAdmin.from("intake_sessions").select("id, full_name, email").in("id", sessionIds)
         : Promise.resolve({ data: [] as any[] }),
       medIds.length
-        ? supabaseAdmin.from("medicines").select("id, name").in("id", medIds)
+        ? supabaseAdmin
+            .from("medicines")
+            .select("id, name, requires_consultation")
+            .in("id", medIds)
         : Promise.resolve({ data: [] as any[] }),
       provIds.length
         ? supabaseAdmin.from("profiles").select("id, full_name, email").in("id", provIds)
@@ -298,6 +534,10 @@ export const listRequests = createServerFn({ method: "POST" })
       pharmacyIds.length
         ? supabaseAdmin.from("life_file_pharmacies").select("id, name").in("id", pharmacyIds)
         : Promise.resolve({ data: [] as any[] }),
+      loadShopIntakeState(
+        supabaseAdmin,
+        (list as { id: string }[]).map((row) => row.id),
+      ),
     ]);
 
     const pMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
@@ -306,13 +546,16 @@ export const listRequests = createServerFn({ method: "POST" })
     const provMap = new Map((provs ?? []).map((p: any) => [p.id, p]));
     const pharmacyMap = new Map((pharmacies ?? []).map((p: any) => [p.id, p]));
 
-    let result = list.map((r: any) => {
+    let result: any[] = list.map((r: any) => {
       const p = pMap.get(r.user_id) as any;
       const sess = !p ? (sMap.get(r.session_id) as any) : null;
       const prov = provMap.get(r.provider_id) as any;
       const pharmacy = pharmacyMap.get(r.life_file_pharmacy_id) as any;
       return {
         id: r.id,
+        user_id: r.user_id ?? null,
+        session_id: r.session_id ?? null,
+        order_group_id: r.order_group_id ?? null,
         customer_name: p?.full_name ?? sess?.full_name ?? null,
         customer_email: p?.email ?? sess?.email ?? null,
         is_guest: !p && !!sess,
@@ -321,14 +564,71 @@ export const listRequests = createServerFn({ method: "POST" })
         pharmacy_name: pharmacy?.name ?? null,
         kind: r.kind,
         status: r.status,
-        requires_consultation: r.requires_consultation,
+        plan_change_delta_cents: r.plan_change_delta_cents ?? null,
+        requires_consultation:
+          (medMap.get(r.medicine_id) as any)?.requires_consultation ?? r.requires_consultation,
         tracking_number: r.tracking_number,
         life_file_status: r.life_file_status ?? null,
         life_file_order_id: r.life_file_order_id ?? null,
         life_file_error: r.life_file_error ?? null,
+        life_file_submitted_at: r.life_file_submitted_at ?? null,
         created_at: r.created_at,
       };
     });
+
+    if (role === "provider") {
+      const sessionIds = list.map((r: any) => r.session_id).filter(Boolean);
+      const userIds = Array.from(new Set(list.map((r: any) => r.user_id).filter(Boolean)));
+      const [filledSessions, completedUsers, consultRes] = await Promise.all([
+        filledSessionIdSet(supabaseAdmin, sessionIds),
+        completedIntakeUserIds(supabaseAdmin, userIds),
+        userIds.length
+          ? supabaseAdmin
+              .from("patient_consultations")
+              .select("user_id, ended_at, started_at")
+              .in("user_id", userIds)
+              .order("started_at", { ascending: false })
+          : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const consultByUser = new Map<string, { ended_at: string | null }>();
+      for (const row of ((consultRes as any).data ?? []) as any[]) {
+        const prev = consultByUser.get(row.user_id);
+        if (!prev) consultByUser.set(row.user_id, { ended_at: row.ended_at ?? null });
+        else if (!row.ended_at) consultByUser.set(row.user_id, { ended_at: null });
+      }
+      result = result.map((row: any) => {
+        const source = list.find((r: any) => r.id === row.id);
+        const consult = source?.user_id ? consultByUser.get(source.user_id) : undefined;
+        let consultation_status = "Not required";
+        if (row.requires_consultation) {
+          if (!consult) consultation_status = "Required";
+          else if (!consult.ended_at) consultation_status = "In progress";
+          else consultation_status = "Completed";
+        }
+        return {
+          ...row,
+          intake_filled: shopIntake.shopIds.has(row.id)
+            ? shopIntakeReady(shopIntake.byRequest.get(row.id))
+            : Boolean(
+                (source?.session_id && filledSessions.has(source.session_id)) ||
+                  (source?.user_id && completedUsers.has(source.user_id)),
+              ),
+          consultation_status,
+          patient_waiting: consultation_status === "In progress",
+        };
+      });
+      const hiddenUntilIntake = new Set([
+        "payment_completed",
+        "provider_assigned",
+        "pending_review",
+        "awaiting_additional_payment",
+      ]);
+      result = result.filter(
+        (row: any) => row.intake_filled || !hiddenUntilIntake.has(row.status),
+      );
+    }
+
+    result = collapseOrderRows(result).map(({ user_id: _user, session_id: _session, order_group_id: _group, ...row }) => row);
 
     if (term) {
       const s = term.toLowerCase();
@@ -338,7 +638,8 @@ export const listRequests = createServerFn({ method: "POST" })
           (role !== "provider" && (r.customer_email ?? "").toLowerCase().includes(s)) ||
           (r.medicine_name ?? "").toLowerCase().includes(s) ||
           r.id.toLowerCase().replace(/-/g, "").startsWith(s.replace(/-/g, "")) ||
-          r.id.toLowerCase().includes(s),
+          r.id.toLowerCase().includes(s) ||
+          (r.order_item_ids ?? []).some((id: string) => id.toLowerCase().includes(s)),
       );
     }
     if (role === "provider") {
@@ -362,14 +663,55 @@ export const countOpenRequests = createServerFn({ method: "POST" })
 
 export const getRequest = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const role = await assertReviewer(context as Ctx);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    if (role === "provider") {
+      const { expireOverduePlanChanges } = await import("@/lib/plan-change.server");
+      await expireOverduePlanChanges(supabaseAdmin, context.userId);
+    }
 
     const req = await loadScopedRequest(supabaseAdmin, data.requestId, role, context.userId, "*", {
       allowUnassigned: true,
     });
+    await repairOrdersAwaitingIntake(supabaseAdmin, [req]);
+    const shopIntake = await loadShopIntakeState(supabaseAdmin, [req.id]);
+    const shopDecision = shopIntake.byRequest.get(req.id);
+    const fromShop = shopIntake.shopIds.has(req.id);
+
+    if (role === "provider" && !req.provider_id) {
+      const filled = fromShop
+        ? shopIntakeReady(shopDecision)
+        : await orderHasIntake(supabaseAdmin, req.session_id, req.user_id);
+      const inChat = req.user_id
+        ? (await userIdsInOpenChat(supabaseAdmin, [req.user_id])).has(req.user_id)
+        : false;
+      if (!filled || (!fromShop && !inChat)) throw new Error("This order is not in your queue.");
+    }
+
+    if (role === "provider" && req.provider_id === context.userId) {
+      const { markProviderCaseOpened } = await import("@/lib/email.notifications");
+      await markProviderCaseOpened(supabaseAdmin, req.id);
+    }
+
+    const siblings = await loadSiblingRows(supabaseAdmin, req.id);
+    const order_items = await loadOrderLines(supabaseAdmin, req.id);
+    const groupConsult = await findGroupConsultation(
+      supabaseAdmin,
+      siblings.length ? siblings : [req],
+    );
+    req.requires_consultation = await liveConsultationRequired(
+      supabaseAdmin,
+      siblings.length ? siblings : [req],
+    );
+    // A shop order shows only the form for this purchase. An earlier intake stays off this screen.
+    const intakeSessionId = fromShop
+      ? (shopDecision?.finishedSessionId ?? null)
+      : await intakeSessionForOrder(supabaseAdmin, req.session_id, req.user_id);
+    if (fromShop && req.session_id && req.session_id !== intakeSessionId) {
+      req.session_id = shopDecision?.ownSessionId ?? null;
+    }
 
     const [
       profileRes,
@@ -380,20 +722,19 @@ export const getRequest = createServerFn({ method: "POST" })
       eventsRes,
       rxRes,
       addPayRes,
-      consultRes,
     ] = await Promise.all([
       req.user_id
         ? supabaseAdmin
             .from("profiles")
-            .select("id, full_name, email, state_code")
+            .select("id, full_name, email, state_code, dob, sex")
             .eq("id", req.user_id)
             .maybeSingle()
         : Promise.resolve({ data: null }),
-      req.session_id
+      intakeSessionId
         ? supabaseAdmin
             .from("intake_sessions")
-            .select("id, full_name, email, state_code")
-            .eq("id", req.session_id)
+            .select("id, full_name, email, state_code, dob, sex, height_cm, weight_kg")
+            .eq("id", intakeSessionId)
             .maybeSingle()
         : Promise.resolve({ data: null }),
       req.medicine_id
@@ -428,21 +769,9 @@ export const getRequest = createServerFn({ method: "POST" })
         .select("id, amount_cents, currency, reason, status, created_at, paid_at")
         .eq("request_id", req.id)
         .order("created_at", { ascending: false }),
-      req.subscription_id || req.user_id
-        ? supabaseAdmin
-            .from("patient_consultations")
-            .select("id, qb_appointment_id, qb_dialog_id, started_at, qb_user_id")
-            .or(
-              req.subscription_id
-                ? `subscription_id.eq.${req.subscription_id}`
-                : `user_id.eq.${req.user_id}`,
-            )
-            .order("started_at", { ascending: false })
-            .limit(1)
-        : Promise.resolve({ data: [] }),
     ]);
 
-    const consultRow = ((consultRes as any)?.data as any[])?.[0] ?? null;
+    const consultRow = groupConsult;
     const completedEvent = ((eventsRes.data ?? []) as any[]).find(
       (ev) => typeof ev.note === "string" && /consultation (completed|ended)/i.test(ev.note),
     );
@@ -451,8 +780,8 @@ export const getRequest = createServerFn({ method: "POST" })
           id: consultRow.id,
           qb_appointment_id: consultRow.qb_appointment_id,
           started_at: consultRow.started_at,
-          ended_at: completedEvent ? completedEvent.created_at : null,
-          is_ended: Boolean(completedEvent),
+          ended_at: consultRow.ended_at ?? (completedEvent ? completedEvent.created_at : null),
+          is_ended: Boolean(consultRow.ended_at || completedEvent),
         }
       : null;
 
@@ -466,6 +795,11 @@ export const getRequest = createServerFn({ method: "POST" })
         }
       : null;
 
+    const intake = await withShopConsultationIntake(
+      await loadClinicalIntake(supabaseAdmin, intakeSessionId, sessionRes.data as any),
+      fromShop ? shopDecision : undefined,
+    );
+
     if (role === "provider") {
       const {
         payment_id: _paymentId,
@@ -474,16 +808,28 @@ export const getRequest = createServerFn({ method: "POST" })
         stripe_refund_id: _refundId,
         ...safeRequest
       } = req as Record<string, unknown>;
+      const identity = (profileRes.data as any) ?? (sessionRes.data as any) ?? null;
+      const past_orders = await loadPastOrders(supabaseAdmin, {
+        requestId: req.id,
+        userId: req.user_id,
+        sessionId: req.session_id,
+        excludeIds: order_items.map((line) => line.id),
+      });
       return {
-        request: safeRequest,
+        request: safeRequest as Record<string, string | number | boolean | null>,
         patient: patientPayload
           ? {
+              id: identity?.id ?? null,
               name: patientPayload.name,
               email: null,
               state_code: patientPayload.state_code,
               is_guest: patientPayload.is_guest,
+              dob: identity?.dob ?? null,
+              sex: identity?.sex ?? null,
             }
           : null,
+        intake,
+        past_orders,
         medicine: medRes.data ?? null,
         package: pkgRes.data
           ? {
@@ -509,12 +855,14 @@ export const getRequest = createServerFn({ method: "POST" })
         })),
         prescriptions: rxRes.data ?? [],
         additional_payments: [],
+        order_items,
       };
     }
 
     return {
       request: req,
       patient: patientPayload,
+      intake,
       medicine: medRes.data ?? null,
       package: pkgRes.data ?? null,
       provider: provRes.data ?? null,
@@ -522,12 +870,13 @@ export const getRequest = createServerFn({ method: "POST" })
       events: eventsRes.data ?? [],
       prescriptions: rxRes.data ?? [],
       additional_payments: addPayRes.data ?? [],
+      order_items,
     };
   });
 
 export const approveRequest = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         requestId: z.string().uuid(),
@@ -544,53 +893,48 @@ export const approveRequest = createServerFn({ method: "POST" })
       data.requestId,
       role,
       context.userId,
-      "id, status, provider_id, user_id, medicine_id, variant_id, package_id, requires_consultation, life_file_order_id, life_file_status",
+      "id, status, provider_id, user_id, session_id, subscription_id, medicine_id, variant_id, package_id, requires_consultation, life_file_order_id, life_file_status",
     );
-    if (!["pending_review", "approved", "prescribed"].includes(req.status)) {
-      throw new Error(`Cannot approve a request that is ${req.status}.`);
+    req.requires_consultation = await liveConsultationRequired(supabaseAdmin, [req]);
+    if (req.status !== "pending_review") {
+      throw new Error(
+        req.status === "approved"
+          ? "This order is already approved. Prescribe next."
+          : `Cannot approve a request that is ${req.status}.`,
+      );
     }
-    if (req.life_file_order_id && req.life_file_status && req.life_file_status !== "failed") {
+    if (req.life_file_order_id) {
       throw new Error("This order was already sent to LifeFile.");
     }
     if (!req.provider_id) {
       throw new Error("Assign a provider before approving.");
     }
-    // Clinical approval is provider-only. Pharmacy send follows automatically.
+    // Clinical approval is provider-only. Finishing the consultation prescribes and sends.
     if (role !== "provider" || req.provider_id !== context.userId) {
       throw new Error(
         "Only the assigned provider can approve this order. Assign a provider and have them approve from the practitioner portal.",
       );
     }
-
-    try {
-      await fulfillApprovedRequest(supabaseAdmin, req, {
-        role: "provider",
-        userId: context.userId,
-      });
-    } catch (pharmacyErr) {
-      const pharmacyError =
-        pharmacyErr instanceof Error ? pharmacyErr.message : "Could not send to pharmacy.";
-      console.error("[approveRequest] pharmacy send failed:", pharmacyErr);
-      await supabaseAdmin
-        .from("medication_requests")
-        .update({
-          life_file_status: "failed",
-          life_file_error: pharmacyError.slice(0, 1000),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", req.id);
-      return {
-        ok: false,
-        email_sent: false,
-        admin_emails_sent: false,
-        status: req.status,
-        pharmacy_error: pharmacyError,
-      };
+    const shopIntake = await loadShopIntakeState(supabaseAdmin, [req.id]);
+    if (
+      shopIntake.shopIds.has(req.id)
+        ? !shopIntakeReady(shopIntake.byRequest.get(req.id))
+        : !(await orderHasIntake(supabaseAdmin, req.session_id, req.user_id))
+    ) {
+      throw new Error("intake form missing");
+    }
+    if (
+      req.requires_consultation &&
+      (req.user_id || req.subscription_id) &&
+      !(await consultationOpened(supabaseAdmin, req))
+    ) {
+      throw new Error("Open the consultation before approving this order.");
     }
 
     await supabaseAdmin
       .from("medication_requests")
       .update({
+        status: "approved",
         decision_by: context.userId,
         decision_at: new Date().toISOString(),
         decision_note: data.note?.trim() || null,
@@ -606,30 +950,111 @@ export const approveRequest = createServerFn({ method: "POST" })
       data.note?.trim() || null,
     );
 
-    void import("@/lib/email.notifications")
-      .then(({ notifyAdminsProviderApproved }) =>
-        notifyAdminsProviderApproved({
+    const { notifyPatientRequestEvent, notifyAdminsProviderApproved } = await import(
+      "@/lib/email.notifications"
+    );
+    const email_sent = await notifyPatientRequestEvent({
+      supabaseAdmin,
+      request: req,
+      template: "patient_approved",
+      extraParams: { DECISION_NOTE: data.note?.trim() || "" },
+    });
+    void notifyAdminsProviderApproved({
+      supabaseAdmin,
+      requestId: req.id,
+      medicineId: req.medicine_id,
+      providerId: req.provider_id,
+      patientUserId: req.user_id,
+    }).catch((e) => console.error("[approveRequest] admin email failed:", e));
+
+    if (!req.requires_consultation) {
+      try {
+        await fulfillApprovedRequest(
           supabaseAdmin,
-          requestId: req.id,
-          medicineId: req.medicine_id,
-          providerId: req.provider_id,
-          patientUserId: req.user_id,
-        }),
-      )
-      .catch((e) => console.error("[approveRequest] email failed:", e));
+          { ...req, status: "approved" },
+          { role, userId: context.userId },
+        );
+        return {
+          ok: true,
+          email_sent,
+          admin_emails_sent: true,
+          status: "sent_to_pharmacy",
+          pharmacy_error: null,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not send to the pharmacy.";
+        const blocked = blockedLifeFileSend(message);
+        if (blocked) {
+          return {
+            ok: true,
+            email_sent,
+            admin_emails_sent: true,
+            status: blocked === "sent" ? "sent_to_pharmacy" : "approved",
+            pharmacy_error: null,
+          };
+        }
+        return {
+          ok: true,
+          email_sent,
+          admin_emails_sent: true,
+          status: "approved",
+          pharmacy_error: message,
+        };
+      }
+    }
 
     return {
       ok: true,
-      email_sent: true,
+      email_sent,
       admin_emails_sent: true,
-      status: "sent_to_pharmacy",
+      status: "approved",
       pharmacy_error: null,
     };
   });
 
+async function consultationOpened(
+  supabaseAdmin: any,
+  req: { id: string; user_id?: string | null; subscription_id?: string | null },
+): Promise<boolean> {
+  let q = supabaseAdmin
+    .from("patient_consultations")
+    .select("id")
+    .order("started_at", { ascending: false })
+    .limit(1);
+  if (req.subscription_id) q = q.eq("subscription_id", req.subscription_id);
+  else if (req.user_id) q = q.eq("user_id", req.user_id);
+  else return false;
+  const { data } = await q;
+  if (((data ?? []) as unknown[]).length > 0) return true;
+  return consultationFinished(supabaseAdmin, req);
+}
+
+async function consultationFinished(
+  supabaseAdmin: any,
+  req: { id: string; user_id?: string | null; subscription_id?: string | null },
+): Promise<boolean> {
+  let q = supabaseAdmin
+    .from("patient_consultations")
+    .select("id, ended_at")
+    .order("started_at", { ascending: false })
+    .limit(8);
+  if (req.subscription_id) q = q.eq("subscription_id", req.subscription_id);
+  else if (req.user_id) q = q.eq("user_id", req.user_id);
+  else return false;
+  const { data } = await q;
+  if (((data ?? []) as any[]).some((row) => row.ended_at)) return true;
+  const { data: events } = await supabaseAdmin
+    .from("medication_request_events")
+    .select("note")
+    .eq("request_id", req.id);
+  return ((events ?? []) as any[]).some(
+    (ev) => typeof ev.note === "string" && /consultation (completed|ended|concluded)/i.test(ev.note),
+  );
+}
+
 export const rejectRequest = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({ requestId: z.string().uuid(), note: z.string().trim().max(500).optional() })
       .parse(input),
@@ -649,6 +1074,9 @@ export const rejectRequest = createServerFn({ method: "POST" })
     );
     if (!["pending_review", "awaiting_additional_payment"].includes(req.status)) {
       throw new Error(`Cannot reject a request that is ${req.status}.`);
+    }
+    if (role === "provider" && (data.note?.trim().length ?? 0) < 10) {
+      throw new Error("A reason is required to reject this order.");
     }
 
     // Refund the charge for this order.
@@ -744,7 +1172,7 @@ export const rejectRequest = createServerFn({ method: "POST" })
 
 export const changeRequestMedicine = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         requestId: z.string().uuid(),
@@ -767,7 +1195,7 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
       data.requestId,
       role,
       context.userId,
-      "id, status, provider_id, user_id, subscription_id, package_id, medicine_id",
+      "id, status, provider_id, user_id, subscription_id, package_id, medicine_id, variant_id, requires_consultation, previous_medicine_id, previous_variant_id, previous_package_id",
     );
     if (!["pending_review", "approved", "awaiting_additional_payment"].includes(req.status)) {
       throw new Error(`Cannot change medicine on a request that is ${req.status}.`);
@@ -785,12 +1213,8 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
     if (newPkg.id === req.package_id) {
       throw new Error("That is already this order's medicine, variant and plan.");
     }
-    if (!newPkg.is_active) throw new Error("Selected plan is inactive.");
-    if (!newPkg.stripe_price_id) {
-      throw new Error(
-        "This plan isn't synced to Stripe yet. Open the medicine and save it, then retry.",
-      );
-    }
+    const { planIsSelectable } = await import("@/lib/medicines.functions");
+    await planIsSelectable(supabaseAdmin, newPkg);
 
     // Cross-category switches need an explicit clinical reason, which is logged on the order.
     const currentMedicineId = (req as any).medicine_id as string | null;
@@ -816,6 +1240,10 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
         "This medicine is in a different treatment category. A clinical reason is required.",
       );
     }
+    const clinicalReason = data.note?.trim() || data.crossCategoryReason?.trim() || "";
+    if (role === "provider" && clinicalReason.length < 10) {
+      throw new Error("A clinical reason is required to change this medicine.");
+    }
 
     let currentPrice = 0;
     let curPkg: any = null;
@@ -828,7 +1256,31 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
       curPkg = cur ?? null;
       currentPrice = Number(cur?.price ?? 0);
     }
-    const deltaCents = Math.round((Number(newPkg.price) - currentPrice) * 100);
+    let deltaCents = Math.round((Number(newPkg.price) - currentPrice) * 100);
+    let restoreMedicineId = currentMedicineId as string | null;
+    let restoreVariantId = ((req as { variant_id?: string | null }).variant_id ?? null) as
+      | string
+      | null;
+    let restorePackageId = (req.package_id ?? null) as string | null;
+    if (
+      role === "provider" &&
+      req.status === "awaiting_additional_payment" &&
+      (req.previous_package_id != null || req.previous_medicine_id != null)
+    ) {
+      restoreMedicineId = req.previous_medicine_id ?? null;
+      restoreVariantId = req.previous_variant_id ?? null;
+      restorePackageId = req.previous_package_id ?? null;
+      if (req.previous_package_id) {
+        const { data: originalPkg } = await supabaseAdmin
+          .from("packages")
+          .select("price")
+          .eq("id", req.previous_package_id)
+          .maybeSingle();
+        if (originalPkg) {
+          deltaCents = Math.round((Number(newPkg.price) - Number(originalPkg.price ?? 0)) * 100);
+        }
+      }
+    }
 
     // Load the subscription (for the go-forward reschedule + the customer for a credit).
     let sub: any = null;
@@ -840,15 +1292,23 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
         .maybeSingle();
       sub = s ?? null;
     }
+    let billingCustomerId: string | null = sub?.stripe_customer_id ?? null;
+    let billingNote: string | null = null;
 
-    // Reschedule the subscription so the new plan bills from the NEXT cycle.
-    if (sub?.stripe_subscription_id) {
-      await applyPackageChangeToSubscription({
+    // Admin changes reschedule the subscription now. A practitioner change waits
+    // for the patient to pay, or to approve when nothing extra is due.
+    if (role !== "provider" && sub?.stripe_subscription_id) {
+      const billing = await applyPackageChangeToSubscription({
         stripe,
         supabaseAdmin,
         sub: { id: sub.id, stripe_subscription_id: sub.stripe_subscription_id },
         pkg: newPkg as any,
       });
+      billingCustomerId = billing.stripeCustomerId ?? billingCustomerId;
+      if (!billing.billingUpdated) {
+        billingNote =
+          "Stripe does not have this subscription in the current account, so the next bill was not changed.";
+      }
     }
 
     // Update the order's prescribed medicine snapshot.
@@ -916,23 +1376,60 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
         author_role: role,
         body: `Category change → ${medLabel}. Clinical reason: ${data.crossCategoryReason}`,
       });
+    } else if (data.note?.trim()) {
+      await logEvent(
+        supabaseAdmin,
+        req.id,
+        req.status,
+        role,
+        context.userId,
+        `Medicine changed to ${medLabel}. Reason: ${data.note.trim()}`,
+      );
+      await supabaseAdmin.from("medication_request_notes").insert({
+        request_id: req.id,
+        author_id: context.userId,
+        author_role: role,
+        body: `Medicine change → ${medLabel}. Clinical reason: ${data.note.trim()}`,
+      });
     }
 
-    if (deltaCents > 0) {
-      // More expensive: collect the current-cycle difference before the prescription is generated.
-      await supabaseAdmin.from("additional_payments").insert({
+    if (role === "provider" && deltaCents > 0) {
+      const now = new Date().toISOString();
+      const portalBase = process.env.PATIENT_PORTAL_URL?.replace(/\/$/, "") ?? "";
+      const payUrl = portalBase ? `${portalBase}/orders/${req.id}/pay` : "";
+
+      await supabaseAdmin
+        .from("additional_payments")
+        .update({ status: "cancelled", updated_at: now })
+        .eq("request_id", req.id)
+        .eq("status", "pending");
+
+      const { error: payErr } = await supabaseAdmin.from("additional_payments").insert({
         request_id: req.id,
         user_id: req.user_id,
         amount_cents: deltaCents,
         currency: "usd",
         reason: `Price difference for changing to ${medLabel}`,
-        from_package_id: req.package_id,
+        from_package_id: restorePackageId,
         to_package_id: newPkg.id,
         status: "pending",
       });
+      if (payErr) throw new Error(payErr.message ?? "Could not record the additional payment.");
+
       await supabaseAdmin
         .from("medication_requests")
-        .update({ status: "awaiting_additional_payment", updated_at: new Date().toISOString() })
+        .update({
+          status: "awaiting_additional_payment",
+          previous_medicine_id: restoreMedicineId,
+          previous_variant_id: restoreVariantId,
+          previous_package_id: restorePackageId,
+          plan_change_token: null,
+          plan_change_deadline: (
+            await import("@/lib/plan-change.server")
+          ).planChangeDeadline(),
+          plan_change_delta_cents: deltaCents,
+          updated_at: now,
+        })
         .eq("id", req.id);
       await logEvent(
         supabaseAdmin,
@@ -940,12 +1437,13 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
         "awaiting_additional_payment",
         role,
         context.userId,
-        `Changed to ${medLabel}; additional $${(deltaCents / 100).toFixed(2)} due.`,
+        `Changed to ${medLabel}; waiting for the patient to pay $${(deltaCents / 100).toFixed(2)}.`,
       );
 
-      const { notifyPatientRequestEvent, notifyProviderRequestEvent } =
-        await import("@/lib/email.notifications");
-      const portalBase = process.env.PATIENT_PORTAL_URL?.replace(/\/$/, "") ?? "";
+      const { notifyPatientRequestEvent, medicineChangeMailLinks } = await import(
+        "@/lib/email.notifications"
+      );
+      const links = medicineChangeMailLinks(req.id, "payment");
       const email_sent = await notifyPatientRequestEvent({
         supabaseAdmin,
         request: { ...req, medicine_id: newPkg.medicine_id },
@@ -954,7 +1452,166 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
           MEDICINE_NAME: medLabel,
           AMOUNT_DUE: (deltaCents / 100).toFixed(2),
           AMOUNT_DUE_CENTS: deltaCents,
-          PORTAL_URL: portalBase ? `${portalBase}/orders/${req.id}/pay` : "",
+          PORTAL_URL: links.PORTAL_URL || payUrl,
+          SECONDARY_URL: links.SECONDARY_URL,
+        },
+      });
+
+      return {
+        ok: true,
+        delta_cents: deltaCents,
+        status: "awaiting_additional_payment",
+        email_sent,
+      };
+    }
+
+    if (role === "provider") {
+      const now = new Date().toISOString();
+      const { planChangeDeadline, newPlanChangeToken } = await import("@/lib/plan-change.server");
+      await supabaseAdmin
+        .from("medication_requests")
+        .update({
+          status: "awaiting_additional_payment",
+          previous_medicine_id: restoreMedicineId,
+          previous_variant_id: restoreVariantId,
+          previous_package_id: restorePackageId,
+          plan_change_token: newPlanChangeToken(),
+          plan_change_deadline: planChangeDeadline(),
+          plan_change_delta_cents: deltaCents,
+          updated_at: now,
+        })
+        .eq("id", req.id);
+      await logEvent(
+        supabaseAdmin,
+        req.id,
+        "awaiting_additional_payment",
+        role,
+        context.userId,
+        deltaCents < 0
+          ? `Changed to ${medLabel}. Waiting for the patient to approve. $${(Math.abs(deltaCents) / 100).toFixed(2)} is credited on the next bill only after they approve.`
+          : `Changed to ${medLabel}. Waiting for the patient to approve.`,
+      );
+      const { notifyPatientRequestEvent, medicineChangeMailLinks } = await import(
+        "@/lib/email.notifications"
+      );
+      const links = medicineChangeMailLinks(req.id, "consent");
+      const email_sent = await notifyPatientRequestEvent({
+        supabaseAdmin,
+        request: { ...req, medicine_id: newPkg.medicine_id },
+        template: "patient_plan_consent",
+        extraParams: {
+          MEDICINE_NAME: medLabel,
+          CREDIT_AMOUNT: deltaCents < 0 ? (Math.abs(deltaCents) / 100).toFixed(2) : "0.00",
+          PORTAL_URL: links.PORTAL_URL,
+          SECONDARY_URL: links.SECONDARY_URL,
+        },
+      });
+      return {
+        ok: true,
+        delta_cents: deltaCents,
+        status: "awaiting_additional_payment",
+        email_sent,
+      };
+    }
+
+    if (deltaCents > 0) {
+      // More expensive: collect the difference, then pharmacy dispatch runs on payment success.
+      const now = new Date().toISOString();
+      await supabaseAdmin
+        .from("additional_payments")
+        .update({ status: "cancelled", updated_at: now })
+        .eq("request_id", req.id)
+        .eq("status", "pending");
+
+      const { data: payRow, error: payErr } = await supabaseAdmin
+        .from("additional_payments")
+        .insert({
+          request_id: req.id,
+          user_id: req.user_id,
+          amount_cents: deltaCents,
+          currency: "usd",
+          reason: `Price difference for changing to ${medLabel}`,
+          from_package_id: req.package_id,
+          to_package_id: newPkg.id,
+          status: "pending",
+        })
+        .select("id")
+        .single();
+      if (payErr || !payRow) throw new Error(payErr?.message ?? "Could not record the additional payment.");
+
+      let customerEmail: string | null = null;
+      let customerId = (sub?.stripe_customer_id as string | null) ?? null;
+      if (req.user_id) {
+        const { data: profile } = await supabaseAdmin
+          .from("profiles")
+          .select("email, stripe_customer_id")
+          .eq("id", req.user_id)
+          .maybeSingle();
+        customerEmail = (profile as { email?: string | null } | null)?.email ?? null;
+        customerId =
+          customerId ||
+          ((profile as { stripe_customer_id?: string | null } | null)?.stripe_customer_id ?? null);
+      }
+
+      const portalBase = process.env.PATIENT_PORTAL_URL?.replace(/\/$/, "") ?? "";
+      let payUrl = portalBase ? `${portalBase}/orders/${req.id}/pay` : "";
+      if (!payUrl) {
+        try {
+          const { createAdditionalPaymentCheckout } = await import(
+            "@/lib/additional-payment-dispatch.server"
+          );
+          const checkout = await createAdditionalPaymentCheckout({
+            paymentId: payRow.id,
+            requestId: req.id,
+            amountCents: deltaCents,
+            medicineLabel: medLabel,
+            customerId,
+            customerEmail,
+          });
+          if (checkout) {
+            payUrl = checkout.url;
+            await supabaseAdmin
+              .from("additional_payments")
+              .update({ stripe_checkout_session_id: checkout.id, updated_at: now })
+              .eq("id", payRow.id);
+          }
+        } catch (checkoutErr) {
+          console.error("[requests] additional payment checkout failed:", checkoutErr);
+        }
+      }
+
+      await supabaseAdmin
+        .from("medication_requests")
+        .update({
+          status: "awaiting_additional_payment",
+          plan_change_delta_cents: deltaCents,
+          updated_at: now,
+        })
+        .eq("id", req.id);
+      await logEvent(
+        supabaseAdmin,
+        req.id,
+        "awaiting_additional_payment",
+        role,
+        context.userId,
+        [`Changed to ${medLabel}; additional $${(deltaCents / 100).toFixed(2)} due.`, billingNote]
+          .filter(Boolean)
+          .join(" "),
+      );
+
+      const { notifyPatientRequestEvent, notifyProviderRequestEvent, medicineChangeMailLinks } =
+        await import("@/lib/email.notifications");
+      const links = medicineChangeMailLinks(req.id, "payment");
+      const email_sent = await notifyPatientRequestEvent({
+        supabaseAdmin,
+        request: { ...req, medicine_id: newPkg.medicine_id },
+        template: "patient_additional_payment",
+        extraParams: {
+          MEDICINE_NAME: medLabel,
+          AMOUNT_DUE: (deltaCents / 100).toFixed(2),
+          AMOUNT_DUE_CENTS: deltaCents,
+          PORTAL_URL: links.PORTAL_URL || payUrl,
+          SECONDARY_URL: links.SECONDARY_URL,
         },
       });
       await notifyProviderRequestEvent({
@@ -974,17 +1631,20 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
       };
     }
 
-    if (deltaCents < 0 && sub?.stripe_customer_id) {
+    if (deltaCents < 0 && billingCustomerId) {
       // Cheaper: credit the difference to the customer balance so it settles the next invoice.
       try {
-        await stripe.customers.createBalanceTransaction(sub.stripe_customer_id, {
+        await stripe.customers.createBalanceTransaction(billingCustomerId, {
           amount: deltaCents, // negative = credit toward future invoices
           currency: "usd",
           description: `Credit for changing to ${medLabel} (settles next cycle)`,
         });
       } catch (e) {
         console.error("[requests] customer balance credit failed:", e);
+        billingNote = billingNote ?? "The lower price could not be credited in Stripe.";
       }
+    } else if (deltaCents < 0) {
+      billingNote = billingNote ?? "The lower price could not be credited because Stripe has no customer for this patient.";
     }
 
     // Same price or cheaper: the change is approved immediately.
@@ -998,28 +1658,48 @@ export const changeRequestMedicine = createServerFn({ method: "POST" })
       "approved",
       role,
       context.userId,
-      deltaCents < 0
-        ? `Changed to ${medLabel}; $${(Math.abs(deltaCents) / 100).toFixed(2)} credited next cycle.`
-        : `Changed to ${medLabel}.`,
+      [
+        deltaCents < 0
+          ? `Changed to ${medLabel}; $${(Math.abs(deltaCents) / 100).toFixed(2)} credited next cycle.`
+          : `Changed to ${medLabel}.`,
+        billingNote,
+      ]
+        .filter(Boolean)
+        .join(" "),
     );
 
-    const { notifyPatientRequestEvent } = await import("@/lib/email.notifications");
-    const email_sent = await notifyPatientRequestEvent({
-      supabaseAdmin,
-      request: { ...req, medicine_id: newPkg.medicine_id },
-      template: "patient_medicine_changed",
-      extraParams: {
-        MEDICINE_NAME: medLabel,
-        CREDIT_AMOUNT: deltaCents < 0 ? (Math.abs(deltaCents) / 100).toFixed(2) : "0.00",
-      },
-    });
+    // Nothing is due, so the patient is not emailed. A still-open consultation sends the
+    // order when the practitioner finishes it. An already-finished visit sends now.
+    const consultAlreadyFinished = await consultationFinished(supabaseAdmin, req);
+    const deferPharmacy = Boolean(req.requires_consultation) && !consultAlreadyFinished;
+    const sent = deferPharmacy
+      ? { error: null as string | null, lifeFileOrderId: null as string | null }
+      : await prescribeAndSendToPharmacy(
+          supabaseAdmin,
+          {
+            id: req.id,
+            provider_id: req.provider_id,
+            user_id: req.user_id,
+            medicine_id: newPkg.medicine_id,
+            variant_id: newPkg.variant_id,
+            package_id: newPkg.id,
+          },
+          { role: "admin", userId: context.userId },
+        );
 
-    return { ok: true, delta_cents: deltaCents, status: "approved", email_sent };
+    return {
+      ok: true,
+      delta_cents: deltaCents,
+      status: !deferPharmacy && !sent.error ? "sent_to_pharmacy" : "approved",
+      email_sent: false,
+      lifeFileOrderId: sent.lifeFileOrderId,
+      pharmacy_error: sent.error,
+    };
   });
 
 export const generatePrescription = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         requestId: z.string().uuid(),
@@ -1041,9 +1721,7 @@ export const generatePrescription = createServerFn({ method: "POST" })
     if (req.status !== "approved") {
       throw new Error(
         req.status === "awaiting_additional_payment"
-          ? role === "provider"
-            ? "The patient needs to confirm the plan change before a prescription can be generated."
-            : "The additional payment must be completed before generating the prescription."
+          ? "The additional payment must be completed before generating the prescription."
           : `Cannot generate a prescription for a request that is ${req.status}.`,
       );
     }
@@ -1056,9 +1734,7 @@ export const generatePrescription = createServerFn({ method: "POST" })
       .maybeSingle();
     if (pendingPay) {
       throw new Error(
-        role === "provider"
-          ? "The patient still needs to confirm the plan change."
-          : "An additional payment is still pending for this order.",
+        "An additional payment is still pending for this order.",
       );
     }
 
@@ -1110,7 +1786,7 @@ export const generatePrescription = createServerFn({ method: "POST" })
 /** Admin: create Rx if needed + submit to LifeFile after provider approval. */
 export const sendRequestToPharmacy = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         requestId: z.string().uuid(),
@@ -1119,19 +1795,25 @@ export const sendRequestToPharmacy = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data, context }) => {
-    await assertAdmin(context as Ctx);
+    const role = await assertReviewer(context as Ctx);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     const req = await loadScopedRequest(
       supabaseAdmin,
       data.requestId,
-      "admin",
+      role,
       context.userId,
       "id, status, provider_id, user_id, medicine_id, variant_id, package_id, life_file_order_id, life_file_status",
     );
 
-    const providerSendFailed = req.status === "pending_review" && req.life_file_status === "failed";
-    if (!["approved", "prescribed"].includes(req.status) && !providerSendFailed) {
+    const providerSendFailed =
+      role === "admin" && req.status === "pending_review" && req.life_file_status === "failed";
+    if (role === "provider") {
+      if (req.provider_id !== context.userId) throw new Error("Order not found.");
+      if (req.status !== "prescribed") {
+        throw new Error("Prescribe before sending this order to the pharmacy.");
+      }
+    } else if (!["approved", "prescribed"].includes(req.status) && !providerSendFailed) {
       throw new Error(
         req.status === "pending_review"
           ? "Wait for the provider to approve this order before sending to pharmacy."
@@ -1141,14 +1823,14 @@ export const sendRequestToPharmacy = createServerFn({ method: "POST" })
     if (!req.provider_id) {
       throw new Error("This order has no assigned provider.");
     }
-    if (req.life_file_order_id && req.life_file_status && req.life_file_status !== "failed") {
+    if (req.life_file_order_id) {
       throw new Error("This order was already submitted to LifeFile.");
     }
 
     const sent = await fulfillApprovedRequest(
       supabaseAdmin,
       req,
-      { role: "admin", userId: context.userId },
+      { role, userId: context.userId },
       data.directions,
     );
 
@@ -1165,7 +1847,7 @@ export const sendRequestToPharmacy = createServerFn({ method: "POST" })
 // order is created unassigned and the admin routes it to the right provider.
 export const assignRequestProvider = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({ requestId: z.string().uuid(), providerId: z.string().uuid().nullable() })
       .parse(input),
@@ -1181,6 +1863,29 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
       .maybeSingle();
 
     if (!existing) throw new Error("Request not found.");
+
+    if (data.providerId !== existing.provider_id) {
+      const group = await loadSiblingRows(supabaseAdmin, data.requestId);
+      const consult = await findGroupConsultation(
+        supabaseAdmin,
+        group.length ? group : [existing],
+      );
+      let consultationDone = Boolean(consult?.ended_at);
+      if (!consultationDone) {
+        const { data: events } = await supabaseAdmin
+          .from("medication_request_events")
+          .select("note")
+          .eq("request_id", existing.id);
+        consultationDone = ((events ?? []) as { note?: string | null }[]).some(
+          (ev) => typeof ev.note === "string" && /consultation (completed|ended)/i.test(ev.note),
+        );
+      }
+      if (consultationDone) {
+        throw new Error(
+          "The consultation is already complete, so the provider cannot be changed.",
+        );
+      }
+    }
 
     if (role === "provider" && existing.provider_id && existing.provider_id !== context.userId) {
       throw new Error(
@@ -1203,6 +1908,16 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
     }
 
     if (data.providerId) {
+      const { data: targetProv, error: unavailErr } = await supabaseAdmin
+        .from("providers")
+        .select("is_unavailable")
+        .eq("id", data.providerId)
+        .maybeSingle();
+      if (unavailErr && !/is_unavailable/i.test(unavailErr.message)) throw new Error(unavailErr.message);
+      if (targetProv?.is_unavailable) {
+        throw new Error("This practitioner is unavailable. Choose someone else.");
+      }
+
       const [profileRes, sessionRes] = await Promise.all([
         existing.user_id
           ? supabaseAdmin
@@ -1240,6 +1955,54 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
           `This practitioner is not licensed in ${patientState}. Choose someone licensed in the patient's state.`,
         );
       }
+      const shopIntake = await loadShopIntakeState(supabaseAdmin, [existing.id]);
+      if (shopIntake.shopIds.has(existing.id)) {
+        const decision = shopIntake.byRequest.get(existing.id);
+        const finished = decision?.finishedSessionId ?? null;
+        if (!shopIntakeReady(decision)) {
+          throw new Error(
+            "This patient has not finished the intake form, so the order cannot be assigned yet.",
+          );
+        }
+        if (finished && existing.session_id !== finished) {
+          existing.session_id = finished;
+          await supabaseAdmin
+            .from("medication_requests")
+            .update({ session_id: finished, updated_at: new Date().toISOString() })
+            .eq("id", existing.id);
+          if (existing.subscription_id) {
+            await supabaseAdmin
+              .from("subscriptions")
+              .update({ session_id: finished })
+              .eq("id", existing.subscription_id);
+          }
+        }
+      } else if (!(await orderHasIntake(supabaseAdmin, existing.session_id, existing.user_id))) {
+        throw new Error(
+          "This patient has not finished the intake form, so the order cannot be assigned yet.",
+        );
+      } else if (!existing.session_id) {
+        const sessionId = await intakeSessionForOrder(
+          supabaseAdmin,
+          existing.session_id,
+          existing.user_id,
+        );
+        if (sessionId) {
+          existing.session_id = sessionId;
+          await supabaseAdmin
+            .from("medication_requests")
+            .update({ session_id: sessionId, updated_at: new Date().toISOString() })
+            .eq("id", existing.id)
+            .is("session_id", null);
+          if (existing.subscription_id) {
+            await supabaseAdmin
+              .from("subscriptions")
+              .update({ session_id: sessionId })
+              .eq("id", existing.subscription_id)
+              .is("session_id", null);
+          }
+        }
+      }
     }
 
     const patch: {
@@ -1257,11 +2020,31 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
       patch.status = "pending_review";
     }
 
-    const { error } = await supabaseAdmin
-      .from("medication_requests")
-      .update(patch)
-      .eq("id", data.requestId);
-    if (error) throw new Error(error.message);
+    const siblings = (await loadSiblingRows(supabaseAdmin, data.requestId)).filter(
+      (row) =>
+        row.id !== data.requestId &&
+        !CLOSED_ORDER_STATUSES.includes(row.status) &&
+        (row.provider_id == null || row.provider_id === existing.provider_id),
+    );
+    const moving = [existing, ...siblings];
+    for (const row of moving) {
+      const rowPatch = {
+        ...patch,
+        ...(existing.session_id && !row.session_id ? { session_id: existing.session_id } : {}),
+      };
+      if (
+        rowPatch.status &&
+        row.status !== "payment_completed" &&
+        row.status !== "provider_assigned"
+      ) {
+        delete rowPatch.status;
+      }
+      const { error } = await supabaseAdmin
+        .from("medication_requests")
+        .update(rowPatch)
+        .eq("id", row.id);
+      if (error) throw new Error(error.message);
+    }
     if (data.providerId) {
       const { data: provProfile } = await supabaseAdmin
         .from("profiles")
@@ -1282,6 +2065,16 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
         context.userId,
         assignmentNote,
       );
+      for (const row of siblings) {
+        await logEvent(
+          supabaseAdmin,
+          row.id,
+          "provider_assigned",
+          role === "admin" ? "admin" : "provider",
+          context.userId,
+          assignmentNote,
+        );
+      }
 
       try {
         await supabaseAdmin.from("medication_request_notes").insert({
@@ -1306,19 +2099,29 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
             ensurePatientQuickbloxClient,
             createPatientAppointment,
             ensureDialogOccupants,
+            removeDialogOccupants,
             sendChatMessageToDialog,
           } = await import("@/lib/consultations/quickblox");
 
           const agent = await provisionBodyIncProviderAgent(supabaseAdmin, data.providerId);
           let prevToken: string | undefined;
-          if (existing.provider_id) {
+          let prevQbUserId: number | null = null;
+          if (existing.provider_id && existing.provider_id !== data.providerId) {
             try {
               const prevSession = await sessionForBodyIncProvider(
                 supabaseAdmin,
                 existing.provider_id,
               );
               prevToken = prevSession.token;
-            } catch {}
+              prevQbUserId = prevSession.userId ?? null;
+            } catch {
+              const { data: prevProv } = await supabaseAdmin
+                .from("providers")
+                .select("qb_user_id")
+                .eq("id", existing.provider_id)
+                .maybeSingle();
+              prevQbUserId = prevProv?.qb_user_id ?? null;
+            }
           }
 
           const conds: string[] = [];
@@ -1362,6 +2165,18 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
                       dialogId: activeDialogId,
                       occupantsIds: occupants,
                     });
+                    if (
+                      prevQbUserId &&
+                      prevQbUserId !== agent.qbUserId &&
+                      prevQbUserId !== adminQbId &&
+                      prevQbUserId !== c.qb_user_id
+                    ) {
+                      await removeDialogOccupants({
+                        dialogId: activeDialogId,
+                        occupantsIds: [prevQbUserId],
+                        token: prevToken,
+                      });
+                    }
                     await sendChatMessageToDialog({
                       dialogId: activeDialogId,
                       message: assignmentNote,
@@ -1473,7 +2288,7 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
 
 export const getPrescription = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ prescriptionId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ prescriptionId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const role = await assertReviewer(context as Ctx);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -1508,7 +2323,7 @@ const FULFILLMENT_STATUSES = ["sent_to_pharmacy", "dispatched", "delivered", "ca
 
 export const advanceRequestStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         requestId: z.string().uuid(),
@@ -1534,7 +2349,7 @@ export const advanceRequestStatus = createServerFn({ method: "POST" })
 
     if (data.status === "sent_to_pharmacy") {
       // Already submitted successfully — allow status mark without re-sending.
-      if (req.life_file_order_id && req.life_file_status && req.life_file_status !== "failed") {
+      if (req.life_file_order_id) {
         lifeFileOrderId = req.life_file_order_id;
       } else {
         const { submitRequestToLifeFile } = await import("@/integrations/lifefile/submit.server");
@@ -1615,7 +2430,7 @@ export const advanceRequestStatus = createServerFn({ method: "POST" })
 /** Admin/provider retry after a failed LifeFile submission (PDF §12). */
 export const retryLifeFileSubmission = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context as Ctx);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -1631,7 +2446,7 @@ export const retryLifeFileSubmission = createServerFn({ method: "POST" })
     if (!["prescribed", "approved", "sent_to_pharmacy"].includes(req.status)) {
       throw new Error(`Cannot retry LifeFile for a request that is ${req.status}.`);
     }
-    if (req.life_file_order_id && req.life_file_status && req.life_file_status !== "failed") {
+    if (req.life_file_order_id) {
       throw new Error("This order was already submitted to LifeFile.");
     }
 
@@ -1642,7 +2457,7 @@ export const retryLifeFileSubmission = createServerFn({ method: "POST" })
       .limit(1)
       .maybeSingle();
     if (!hasRx) {
-      throw new Error("Generate the prescription before sending to LifeFile.");
+      throw new Error("Prescribe before sending to the pharmacy.");
     }
 
     const { submitRequestToLifeFile } = await import("@/integrations/lifefile/submit.server");
@@ -1674,7 +2489,7 @@ export const retryLifeFileSubmission = createServerFn({ method: "POST" })
 
 export const listRequestNotes = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ requestId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const role = await assertReviewer(context as Ctx);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -1716,7 +2531,7 @@ export const listRequestNotes = createServerFn({ method: "POST" })
 
 export const addRequestNote = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({ requestId: z.string().uuid(), body: z.string().trim().min(1).max(4000) })
       .parse(input),
@@ -1740,6 +2555,58 @@ export const addRequestNote = createServerFn({ method: "POST" })
       author_id: context.userId,
       author_role: role,
       body: data.body,
+    });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+const CONSULT_OUTCOMES = {
+  no_show: {
+    status: "consultation_no_show",
+    note: "Patient no-show. Reschedule the visit.",
+  },
+  call_dropped: {
+    status: "consultation_dropped",
+    note: "Call dropped. Resume the visit or reschedule.",
+  },
+  reschedule: {
+    status: "consultation_reschedule",
+    note: "Reschedule requested.",
+  },
+} as const;
+
+export const recordConsultationOutcome = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: unknown) =>
+    z
+      .object({
+        requestId: z.string().uuid(),
+        outcome: z.enum(["no_show", "call_dropped", "reschedule"]),
+        note: z.string().trim().max(500).optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const role = await assertReviewer(context as Ctx);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const req = await loadScopedRequest(
+      supabaseAdmin,
+      data.requestId,
+      role,
+      context.userId,
+      "id, status, provider_id",
+    );
+    if (data.outcome === "reschedule" && (data.note?.trim().length ?? 0) < 3) {
+      throw new Error("Add a short note for the reschedule.");
+    }
+    const preset = CONSULT_OUTCOMES[data.outcome];
+    const note = [preset.note, data.note?.trim()].filter(Boolean).join(" ");
+    const { error } = await supabaseAdmin.from("medication_request_events").insert({
+      request_id: req.id,
+      status: preset.status,
+      actor_role: role,
+      created_by: context.userId,
+      note,
     });
     if (error) throw new Error(error.message);
     return { ok: true };

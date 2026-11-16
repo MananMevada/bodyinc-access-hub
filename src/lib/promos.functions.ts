@@ -7,7 +7,7 @@ const promoBase = z.object({
   code: z
     .string()
     .trim()
-    .min(1)
+    .min(1, "Promo code is required")
     .max(60)
     .regex(/^[A-Za-z0-9_-]+$/, "Code may only contain letters, numbers, dashes, and underscores"),
   discount_type: z.enum(["percent", "amount"]),
@@ -68,7 +68,7 @@ export const listPromos = createServerFn({ method: "POST" })
 
 export const getPromo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -84,7 +84,7 @@ export const getPromo = createServerFn({ method: "POST" })
 
 export const createPromo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => promoInput.parse(input))
+  .validator((input: unknown) => promoInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -105,7 +105,7 @@ export const createPromo = createServerFn({ method: "POST" })
 
 export const updatePromo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => promoUpdateInput.parse(input))
+  .validator((input: unknown) => promoUpdateInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -123,7 +123,7 @@ export const updatePromo = createServerFn({ method: "POST" })
 
 export const setPromoActive = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ id: z.string().uuid(), is_active: z.boolean() }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -139,11 +139,26 @@ export const setPromoActive = createServerFn({ method: "POST" })
 
 export const deletePromo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.from("promo_codes").delete().eq("id", data.id);
-    if (error) throw new Error(error.message);
+    const { backupThen, fetchMatching, newBackupId } = await import("@/lib/data-backup.server");
+    const db = supabaseAdmin as any;
+    const rows = await fetchMatching(db, "promo_codes", "id", [data.id]);
+    await backupThen(
+      db,
+      {
+        wipeId: newBackupId(),
+        group: "promo",
+        wipedBy: context.userId,
+        label: rows[0]?.code?.trim() || "Promo code",
+        batches: [{ table: "promo_codes", rows }],
+      },
+      async () => {
+        const { error } = await supabaseAdmin.from("promo_codes").delete().eq("id", data.id);
+        if (error) throw new Error(error.message);
+      },
+    );
     return { ok: true };
   });

@@ -42,6 +42,7 @@ export type StoredMedicine = {
   requires_questionnaire: boolean;
   requires_consultation: boolean;
   requires_followup: boolean;
+  show_to_providers: boolean;
   lf_product_id: number | null;
   life_file_pharmacy_id: string | null;
   category_ids: string[];
@@ -125,6 +126,10 @@ function lfProductIdWriteError(
   return new Error(error.message);
 }
 
+export function toStoredMedicine(row: any, pharmacyByKey?: Map<string, string>): StoredMedicine {
+  return rowToStored(row, pharmacyByKey);
+}
+
 function rowToStored(row: any, pharmacyByKey?: Map<string, string>): StoredMedicine {
   const info = Array.isArray(row.important_info) ? row.important_info : [];
   const cats = Array.isArray(row.medication_category_medicines)
@@ -170,6 +175,7 @@ function rowToStored(row: any, pharmacyByKey?: Map<string, string>): StoredMedic
     requires_questionnaire: !!row.requires_questionnaire,
     requires_consultation: !!row.requires_consultation,
     requires_followup: !!row.requires_followup,
+    show_to_providers: !!row.show_to_providers,
     lf_product_id: parseLfProductId(row.lf_product_id),
     life_file_pharmacy_id: pharmacyByKey?.get(`m:${row.id}`) ?? null,
     category_ids: cats,
@@ -284,6 +290,7 @@ function fromForm(values: MedicineFormValues) {
     requires_questionnaire: !!values.requires_questionnaire,
     requires_consultation: !!values.requires_consultation,
     requires_followup: !!values.requires_followup,
+    show_to_providers: !!values.show_to_providers,
     lf_product_id: hasVariants ? null : lfProductIdFromForm(values),
   };
 }
@@ -510,7 +517,7 @@ export async function listMedicines(input: ListMedicinesInput = {}): Promise<Sto
   let query = supabase
     .from("medicines")
     .select(
-      "id, name, short_description, long_description, image_url, from_price_cents, status, important_info, notice_text, sort_order, is_active, requires_questionnaire, requires_consultation, requires_followup, lf_product_id, created_at, updated_at, medication_category_medicines(category_id), packages(id, name, duration_months, original_price, price, is_most_popular, is_active, features, clinical_note, sort_order, stripe_price_id, variant_id), medicine_variants(id, name, is_active, lf_product_id, from_price_cents, sort_order)",
+      "id, name, short_description, long_description, image_url, from_price_cents, status, important_info, notice_text, sort_order, is_active, requires_questionnaire, requires_consultation, requires_followup, show_to_providers, lf_product_id, created_at, updated_at, medication_category_medicines(category_id), packages(id, name, duration_months, original_price, price, is_most_popular, is_active, features, clinical_note, sort_order, stripe_price_id, variant_id), medicine_variants(id, name, is_active, lf_product_id, from_price_cents, sort_order)",
     )
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
@@ -538,7 +545,7 @@ export async function getMedicine(id: string): Promise<StoredMedicine | null> {
   const { data, error } = await supabase
     .from("medicines")
     .select(
-      "id, name, short_description, long_description, image_url, from_price_cents, status, important_info, notice_text, sort_order, is_active, requires_questionnaire, requires_consultation, requires_followup, lf_product_id, stripe_product_id, created_at, updated_at, medication_category_medicines(category_id), packages(id, name, duration_months, original_price, price, is_most_popular, is_active, features, clinical_note, sort_order, stripe_price_id, variant_id), medicine_variants(id, name, is_active, lf_product_id, from_price_cents, sort_order, stripe_product_id)",
+      "id, name, short_description, long_description, image_url, from_price_cents, status, important_info, notice_text, sort_order, is_active, requires_questionnaire, requires_consultation, requires_followup, show_to_providers, lf_product_id, stripe_product_id, created_at, updated_at, medication_category_medicines(category_id), packages(id, name, duration_months, original_price, price, is_most_popular, is_active, features, clinical_note, sort_order, stripe_price_id, variant_id), medicine_variants(id, name, is_active, lf_product_id, from_price_cents, sort_order, stripe_product_id)",
     )
     .eq("id", id)
     .maybeSingle();
@@ -589,6 +596,18 @@ export async function updateMedicine(
     .update(payload as any)
     .eq("id", id);
   if (error) throw lfProductIdWriteError(error, "medicine");
+  await supabase
+    .from("medication_requests")
+    .update({ requires_consultation: !!values.requires_consultation })
+    .eq("medicine_id", id)
+    .in("status", [
+      "payment_completed",
+      "provider_assigned",
+      "pending_review",
+      "awaiting_additional_payment",
+      "approved",
+      "prescribed",
+    ]);
   await syncMedicineCategories(id, values.category_ids ?? []);
   const pricing = await reconcileMedicinePricing(id, values);
   const { data: variantRows } = await supabase

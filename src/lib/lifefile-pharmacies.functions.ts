@@ -3,6 +3,11 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 import { assertAdmin } from "@/lib/admin-guard";
 
+const practiceIdSchema = z
+  .union([z.string().trim(), z.number()])
+  .transform((v) => String(v).trim())
+  .refine((v) => /^\d+$/.test(v) && Number(v) > 0, "Practice ID must be a positive number");
+
 const pharmacySchema = z.object({
   name: z.string().trim().min(1, "Pharmacy name is required").max(120),
   api_base_url: z
@@ -11,9 +16,11 @@ const pharmacySchema = z.object({
     .min(1, "API URL is required")
     .max(500)
     .refine((v) => /^https?:\/\//i.test(v), "Enter a valid URL starting with https://"),
-  vendor_id: z.string().trim().max(120).optional().or(z.literal("")),
-  location_id: z.string().trim().max(120).optional().or(z.literal("")),
-  api_network_id: z.string().trim().max(120).optional().or(z.literal("")),
+  api_username: z.string().trim().min(1, "Username is required").max(200),
+  vendor_id: z.string().trim().min(1, "Vendor ID is required").max(120),
+  location_id: z.string().trim().min(1, "Location ID is required").max(120),
+  api_network_id: z.string().trim().min(1, "API Network ID is required").max(120),
+  practice_id: practiceIdSchema,
   is_active: z.boolean().default(true),
 });
 
@@ -21,19 +28,27 @@ export const listLifeFilePharmacies = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     await assertAdmin(context);
-    const { data, error } = await context.supabase
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await supabaseAdmin
       .from("life_file_pharmacies")
       .select(
-        "id, name, api_base_url, vendor_id, location_id, api_network_id, is_active, created_at, updated_at",
+        "id, name, api_base_url, api_username, api_password, vendor_id, location_id, api_network_id, practice_id, is_active, created_at, updated_at",
       )
       .order("name", { ascending: true });
     if (error) throw new Error(error.message);
-    return data ?? [];
+    return (data ?? []).map(({ api_password, ...row }) => ({
+      ...row,
+      has_password: Boolean(api_password),
+    }));
   });
 
 export const createLifeFilePharmacy = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => pharmacySchema.parse(input))
+  .validator((input: unknown) =>
+    pharmacySchema
+      .extend({ api_password: z.string().min(1, "Password is required").max(200) })
+      .parse(input),
+  )
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -42,9 +57,12 @@ export const createLifeFilePharmacy = createServerFn({ method: "POST" })
       .insert({
         name: data.name,
         api_base_url: data.api_base_url,
+        api_username: data.api_username,
+        api_password: data.api_password,
         vendor_id: data.vendor_id || null,
         location_id: data.location_id || null,
         api_network_id: data.api_network_id || null,
+        practice_id: Number(data.practice_id),
         is_active: data.is_active,
       })
       .select("id")
@@ -55,44 +73,76 @@ export const createLifeFilePharmacy = createServerFn({ method: "POST" })
 
 export const updateLifeFilePharmacy = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
-    pharmacySchema.extend({ id: z.string().uuid() }).parse(input),
+  .validator((input: unknown) =>
+    pharmacySchema
+      .extend({
+        id: z.string().uuid(),
+        api_password: z.string().min(1, "Password is required").max(200),
+      })
+      .parse(input),
   )
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { id, ...rest } = data;
-    const { error } = await supabaseAdmin
-      .from("life_file_pharmacies")
-      .update({
-        name: rest.name,
-        api_base_url: rest.api_base_url,
-        vendor_id: rest.vendor_id || null,
-        location_id: rest.location_id || null,
-        api_network_id: rest.api_network_id || null,
-        is_active: rest.is_active,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", id);
+    const { id, api_password, ...rest } = data;
+    const patch: {
+      name: string;
+      api_base_url: string;
+      api_username: string;
+      api_password: string;
+      vendor_id: string | null;
+      location_id: string | null;
+      api_network_id: string | null;
+      practice_id: number;
+      is_active: boolean;
+      updated_at: string;
+    } = {
+      name: rest.name,
+      api_base_url: rest.api_base_url,
+      api_username: rest.api_username,
+      api_password,
+      vendor_id: rest.vendor_id || null,
+      location_id: rest.location_id || null,
+      api_network_id: rest.api_network_id || null,
+      practice_id: Number(rest.practice_id),
+      is_active: rest.is_active,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabaseAdmin.from("life_file_pharmacies").update(patch).eq("id", id);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
 
 export const deleteLifeFilePharmacy = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.from("life_file_pharmacies").delete().eq("id", data.id);
-    if (error) {
-      if (/foreign key|restrict/i.test(error.message)) {
-        throw new Error(
-          "Cannot delete this pharmacy while medicines or provider credentials still reference it. Deactivate it instead.",
-        );
-      }
-      throw new Error(error.message);
-    }
+    const { backupThen, fetchMatching, newBackupId } = await import("@/lib/data-backup.server");
+    const db = supabaseAdmin as any;
+    const rows = await fetchMatching(db, "life_file_pharmacies", "id", [data.id]);
+    await backupThen(
+      db,
+      {
+        wipeId: newBackupId(),
+        group: "lifefile",
+        wipedBy: context.userId,
+        label: rows[0]?.name?.trim() || "LifeFile pharmacy",
+        batches: [{ table: "life_file_pharmacies", rows }],
+      },
+      async () => {
+        const { error } = await supabaseAdmin.from("life_file_pharmacies").delete().eq("id", data.id);
+        if (error) {
+          if (/foreign key|restrict/i.test(error.message)) {
+            throw new Error(
+              "Cannot delete this pharmacy while medicines or provider credentials still reference it. Deactivate it instead.",
+            );
+          }
+          throw new Error(error.message);
+        }
+      },
+    );
     return { ok: true };
   });
 
@@ -124,7 +174,7 @@ const credentialSchema = z.object({
 
 export const listProviderLifeFileCredentials = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ providerId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ providerId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { data: rows, error } = await context.supabase
@@ -148,7 +198,7 @@ export const listProviderLifeFileCredentials = createServerFn({ method: "POST" }
 
 export const upsertProviderLifeFileCredential = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     credentialSchema
       .extend({
         id: z.string().uuid().optional(),
@@ -225,14 +275,29 @@ export const upsertProviderLifeFileCredential = createServerFn({ method: "POST" 
 
 export const deleteProviderLifeFileCredential = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin
-      .from("provider_life_file_credentials")
-      .delete()
-      .eq("id", data.id);
-    if (error) throw new Error(error.message);
+    const { backupThen, fetchMatching, newBackupId } = await import("@/lib/data-backup.server");
+    const db = supabaseAdmin as any;
+    const rows = await fetchMatching(db, "provider_life_file_credentials", "id", [data.id]);
+    await backupThen(
+      db,
+      {
+        wipeId: newBackupId(),
+        group: "lifefile",
+        wipedBy: context.userId,
+        label: "LifeFile provider login",
+        batches: [{ table: "provider_life_file_credentials", rows }],
+      },
+      async () => {
+        const { error } = await supabaseAdmin
+          .from("provider_life_file_credentials")
+          .delete()
+          .eq("id", data.id);
+        if (error) throw new Error(error.message);
+      },
+    );
     return { ok: true };
   });

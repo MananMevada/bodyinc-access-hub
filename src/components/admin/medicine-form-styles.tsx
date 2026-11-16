@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { RequiredMark } from "@/components/admin/required-mark";
 
 const pageTitle =
   "text-[24px] font-medium leading-[37px] tracking-[-0.5px] text-[#152A51] sm:text-[28px]";
@@ -82,16 +83,27 @@ export function MedicineField({
   label,
   error,
   hint,
+  required,
   children,
 }: {
   label: string;
   error?: string;
   hint?: string;
+  required?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className="min-w-0 space-y-2">
-      <label className="block text-[16px] font-medium text-[#152A51]">{label}</label>
+    <div
+      className={`min-w-0 space-y-2 ${
+        error
+          ? "[&_button[role=combobox]]:!border-red-500 [&_input]:!border-red-500 [&_textarea]:!border-red-500"
+          : ""
+      }`}
+    >
+      <label className="block text-[16px] font-medium text-[#152A51]">
+        {label}
+        {required ? <RequiredMark /> : null}
+      </label>
       {children}
       {hint && !error ? (
         <p className="text-[12px] font-normal leading-snug text-[#3B4759]/70">{hint}</p>

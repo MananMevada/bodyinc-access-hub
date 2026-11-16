@@ -150,7 +150,7 @@ const medicineChangesInput = z
  */
 export const listMedicineChanges = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => medicineChangesInput.parse(input ?? {}))
+  .validator((input: unknown) => medicineChangesInput.parse(input ?? {}))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

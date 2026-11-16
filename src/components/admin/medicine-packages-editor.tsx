@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { ConfirmDeleteDialog } from "@/components/admin/confirm-delete-dialog";
+import { RequiredMark } from "@/components/admin/required-mark";
 import {
   useFieldArray,
   Controller,
@@ -49,9 +51,18 @@ export function MedicinePackagesEditor({
 
       {fields.length > 0 && (
         <div className="hidden min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 px-1 text-[12px] font-medium text-[#3B4759]/70 md:grid">
-          <span>Duration (months)</span>
-          <span>Original price ($)</span>
-          <span>Sale price ($)</span>
+          <span>
+            Duration (months)
+            <RequiredMark />
+          </span>
+          <span>
+            Original price ($)
+            <RequiredMark />
+          </span>
+          <span>
+            Sale price ($)
+            <RequiredMark />
+          </span>
           <span className="w-11" />
         </div>
       )}
@@ -137,6 +148,8 @@ function PackageRow({
   onRemove: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [confirmPackage, setConfirmPackage] = useState(false);
+  const [featureToRemove, setFeatureToRemove] = useState<number | null>(null);
   const { fields, append, remove } = useFieldArray({
     control,
     name: `${name}.${index}.features` as any,
@@ -148,6 +161,7 @@ function PackageRow({
         <div className="min-w-0 space-y-1">
           <Label className="text-[12px] font-medium text-[#152A51] md:hidden">
             Duration (months)
+            <RequiredMark />
           </Label>
           <Input
             type="number"
@@ -164,6 +178,7 @@ function PackageRow({
         <div className="min-w-0 space-y-1">
           <Label className="text-[12px] font-medium text-[#3B4759]/70 md:hidden">
             Original price ($)
+            <RequiredMark />
           </Label>
           <Input
             type="number"
@@ -180,6 +195,7 @@ function PackageRow({
         <div className="min-w-0 space-y-1">
           <Label className="text-[12px] font-medium text-[#3B4759]/70 md:hidden">
             Sale price ($)
+            <RequiredMark />
           </Label>
           <Input
             type="number"
@@ -199,7 +215,7 @@ function PackageRow({
           size="icon"
           className="h-[45px] w-[45px] shrink-0 justify-self-end rounded-[14px] text-[#3B4759]/60 hover:bg-destructive/5 hover:text-destructive"
           disabled={submitting}
-          onClick={onRemove}
+          onClick={() => setConfirmPackage(true)}
         >
           <Trash2 className="h-4 w-4" />
         </Button>
@@ -273,7 +289,7 @@ function PackageRow({
                   size="icon"
                   className="h-[45px] w-[45px] shrink-0 rounded-[14px] text-[#3B4759]/60 hover:bg-destructive/5 hover:text-destructive"
                   disabled={submitting}
-                  onClick={() => remove(fi)}
+                  onClick={() => setFeatureToRemove(fi)}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>
@@ -300,6 +316,28 @@ function PackageRow({
           </div>
         </div>
       )}
+      <ConfirmDeleteDialog
+        open={confirmPackage}
+        title="Remove this package?"
+        description="This pricing plan will be removed when you save the medicine."
+        confirmLabel="Remove"
+        onCancel={() => setConfirmPackage(false)}
+        onConfirm={() => {
+          setConfirmPackage(false);
+          onRemove();
+        }}
+      />
+      <ConfirmDeleteDialog
+        open={featureToRemove !== null}
+        title="Remove this feature?"
+        description="This feature will be removed when you save the medicine."
+        confirmLabel="Remove"
+        onCancel={() => setFeatureToRemove(null)}
+        onConfirm={() => {
+          if (featureToRemove !== null) remove(featureToRemove);
+          setFeatureToRemove(null);
+        }}
+      />
     </div>
   );
 }

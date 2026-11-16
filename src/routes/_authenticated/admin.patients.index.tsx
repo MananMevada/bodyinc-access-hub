@@ -320,9 +320,9 @@ function PatientsListPage() {
               Delete {deleteTarget?.label}?
             </AlertDialogTitle>
             <AlertDialogDescription className="text-[#6A9B9C]/80 font-medium">
-              This permanently deletes the patient's account and cancels any active subscription
-              immediately. Payment history is kept for records. The email becomes available for a
-              brand-new signup. This cannot be undone.
+              This removes the patient and their orders from the live lists and cancels any active
+              subscription. A copy is kept under Settings, Deleted items, and can be put back. A
+              restored login needs a password reset, and Stripe billing is not turned back on.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -38,6 +38,19 @@ export function getPracticeId(): number {
   return getLegacyLifeFileConfig().practiceId;
 }
 
+/** LifeFile sometimes replies with a bounce. A normal follow-up turns a new-order send into a page read and LifeFile returns 405. Send the same way again instead. */
+async function fetchLifeFile(url: string, init: RequestInit, redirectsLeft = 3): Promise<Response> {
+  const response = await fetch(url, { ...init, redirect: "manual" });
+  if (response.status < 300 || response.status >= 400 || redirectsLeft <= 0) return response;
+
+  const location = response.headers.get("location");
+  if (!location) return response;
+
+  const nextUrl = new URL(location, url).toString();
+  console.log("[Life File] Following bounce", { from: url, to: nextUrl, status: response.status });
+  return fetchLifeFile(nextUrl, init, redirectsLeft - 1);
+}
+
 export async function lifeFileRequest<T>(
   path: string,
   options: {
@@ -50,9 +63,11 @@ export async function lifeFileRequest<T>(
   const url = `${config.baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
 
   const auth = Buffer.from(`${config.apiUsername}:${config.apiPassword}`).toString("base64");
+  const method = options.method ?? "GET";
+  const body = options.body === undefined ? undefined : JSON.stringify(options.body);
 
   console.log("[Life File] HTTP request", {
-    method: options.method ?? "GET",
+    method,
     url,
     username: config.apiUsername,
     passwordLength: config.apiPassword.length,
@@ -60,8 +75,8 @@ export async function lifeFileRequest<T>(
 
   let response: Response;
   try {
-    response = await fetch(url, {
-      method: options.method ?? "GET",
+    response = await fetchLifeFile(url, {
+      method,
       headers: {
         Authorization: `Basic ${auth}`,
         Accept: "application/json",
@@ -70,7 +85,7 @@ export async function lifeFileRequest<T>(
         "X-Location-ID": config.locationId,
         "X-API-Network-ID": config.apiNetworkId,
       },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body,
     });
   } catch (error) {
     const cause =

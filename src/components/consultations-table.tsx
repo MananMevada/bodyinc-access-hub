@@ -230,7 +230,7 @@ function ConsultationRowView({
           disabled={opening}
           className={`${adminBtnPrimary} h-9 px-4 text-[13px] sm:h-9`}
         >
-          {opening ? "Opening…" : "Join visit"}
+          {opening ? "Opening…" : "Join consultation"}
         </Button>
       </TableCell>
     </TableRow>

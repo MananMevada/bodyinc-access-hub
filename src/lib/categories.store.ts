@@ -100,8 +100,8 @@ export async function updateCategory(
 }
 
 export async function deleteCategory(id: string): Promise<{ ok: true }> {
-  const { error } = await supabase.from("medication_categories").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  const { deleteStoredRecord } = await import("@/lib/catalog-deletes.functions");
+  await deleteStoredRecord({ data: { kind: "category", id } });
   return { ok: true };
 }
 

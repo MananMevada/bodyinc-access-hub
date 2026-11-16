@@ -1,4 +1,5 @@
 import { FormActionBar } from "@/components/admin/form-action-bar";
+import { FieldError, RequiredMark } from "@/components/admin/required-mark";
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ import {
 import {
   adminLabel,
   adminInput,
+  adminInputError,
   adminSelect,
   adminSectionTitle,
   adminSectionSubtitle,
@@ -63,12 +65,29 @@ export function PromoForm({
   onCancel?: () => void;
 }) {
   const [v, setV] = useState<PromoFormValues>({ ...EMPTY, ...defaultValues });
+  const [errors, setErrors] = useState<Partial<Record<"code" | "discount", string>>>({});
   const set = (patch: Partial<PromoFormValues>) => setV((p) => ({ ...p, ...patch }));
 
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
+        const next: Partial<Record<"code" | "discount", string>> = {};
+        if (!v.code.trim()) next.code = "Please enter a promo code.";
+        else if (!/^[A-Za-z0-9_-]+$/.test(v.code.trim())) {
+          next.code = "Use only letters, numbers, dashes, and underscores.";
+        }
+        if (v.discount_type === "amount" && !(Number(v.amount_off) > 0)) {
+          next.discount = "Please enter an amount greater than 0.";
+        }
+        if (
+          v.discount_type === "percent" &&
+          !(Number(v.percent_off) > 0 && Number(v.percent_off) <= 100)
+        ) {
+          next.discount = "Please enter a percent between 1 and 100.";
+        }
+        setErrors(next);
+        if (Object.keys(next).length) return;
         onSubmit(v);
       }}
       className="m-0 w-full min-w-0 max-w-full space-y-5 overflow-x-hidden p-0 font-['DM_Sans',sans-serif] sm:space-y-6"
@@ -85,18 +104,21 @@ export function PromoForm({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5 p-4 pt-0 sm:space-y-6 sm:p-6 sm:pt-0">
-          <Field label="Code">
+          <Field label="Code" required error={errors.code}>
             <Input
               value={v.code}
-              onChange={(e) => set({ code: e.target.value.toUpperCase() })}
+              onChange={(e) => {
+                set({ code: e.target.value.toUpperCase() });
+                setErrors((prev) => ({ ...prev, code: undefined }));
+              }}
               placeholder="e.g. WELCOME20"
               disabled={submitting}
-              className={inputFull}
+              className={`${inputFull} ${errors.code ? adminInputError : ""}`}
             />
           </Field>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
-            <Field label="Discount type">
+            <Field label="Discount type" required>
               <Select
                 value={v.discount_type}
                 onValueChange={(x) => set({ discount_type: x as PromoFormValues["discount_type"] })}
@@ -117,27 +139,33 @@ export function PromoForm({
             </Field>
 
             {v.discount_type === "amount" ? (
-              <Field label="Amount off ($)">
+              <Field label="Amount off ($)" required error={errors.discount}>
                 <Input
                   type="number"
                   min={0}
                   step="0.01"
                   value={v.amount_off}
-                  onChange={(e) => set({ amount_off: Number(e.target.value) })}
+                  onChange={(e) => {
+                    set({ amount_off: Number(e.target.value) });
+                    setErrors((prev) => ({ ...prev, discount: undefined }));
+                  }}
                   disabled={submitting}
-                  className={inputFull}
+                  className={`${inputFull} ${errors.discount ? adminInputError : ""}`}
                 />
               </Field>
             ) : (
-              <Field label="Percent off (%)">
+              <Field label="Percent off (%)" required error={errors.discount}>
                 <Input
                   type="number"
                   min={0}
                   max={100}
                   value={v.percent_off}
-                  onChange={(e) => set({ percent_off: Number(e.target.value) })}
+                  onChange={(e) => {
+                    set({ percent_off: Number(e.target.value) });
+                    setErrors((prev) => ({ ...prev, discount: undefined }));
+                  }}
                   disabled={submitting}
-                  className={inputFull}
+                  className={`${inputFull} ${errors.discount ? adminInputError : ""}`}
                 />
               </Field>
             )}
@@ -189,11 +217,25 @@ export function PromoForm({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({
+  label,
+  required,
+  error,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  error?: string;
+  children: ReactNode;
+}) {
   return (
     <div className={`${fieldShell} space-y-2`}>
-      <Label className={`${adminLabel} break-words`}>{label}</Label>
+      <Label className={`${adminLabel} break-words`}>
+        {label}
+        {required ? <RequiredMark /> : null}
+      </Label>
       {children}
+      <FieldError message={error} />
     </div>
   );
 }

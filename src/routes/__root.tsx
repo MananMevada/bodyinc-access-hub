@@ -20,6 +20,7 @@ import {
 import { clearCachedPortalRoles } from "@/lib/portal-role-cache";
 import { logoutQuickbloxSdk } from "@/lib/consultations/qb-sdk-cleanup";
 import { supabase } from "@/integrations/supabase/client";
+import { registerServiceWorker } from "@/lib/register-pwa";
 
 const LazyToaster = lazy(() =>
   import("@/components/ui/sonner").then((m) => ({ default: m.Toaster })),
@@ -47,7 +48,7 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
+function ErrorComponent({ error, reset }: { error: unknown; reset: () => void }) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
@@ -90,23 +91,28 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Body Inc" },
+      { name: "description", content: "Practitioner and admin portal for Body Inc." },
+      { name: "author", content: "Body Inc" },
+      { name: "theme-color", content: "#152A51" },
+      { name: "mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
+      { name: "apple-mobile-web-app-title", content: "Body Inc" },
+      { property: "og:title", content: "Body Inc" },
+      { property: "og:description", content: "Practitioner and admin portal for Body Inc." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
       },
+      { rel: "manifest", href: "/manifest.webmanifest" },
       { rel: "icon", href: "/fevicone.svg", type: "image/svg+xml" },
       { rel: "shortcut icon", href: "/fevicone.svg" },
-      { rel: "apple-touch-icon", href: "/fevicone.svg" },
+      { rel: "apple-touch-icon", href: "/icons/apple-touch-icon.png" },
     ],
   }),
   shellComponent: RootShell,
@@ -132,6 +138,10 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
+
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
 
   useEffect(() => {
     const recoveryRedirect = getPasswordRecoveryRedirectUrl();

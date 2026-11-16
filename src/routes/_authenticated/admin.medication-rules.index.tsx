@@ -6,6 +6,8 @@ import { queryOptions } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Plus, Trash2 } from "lucide-react";
+import { ConfirmDeleteDialog } from "@/components/admin/confirm-delete-dialog";
+import { RequiredMark } from "@/components/admin/required-mark";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +83,7 @@ function MedicationRulesPage() {
   const [b, setB] = useState<string>("");
   const [type, setType] = useState<RelationshipType>("incompatible");
   const [reason, setReason] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -106,6 +109,7 @@ function MedicationRulesPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: relationshipsKey });
       toast.success("Rule deleted.");
+      setDeleteTarget(null);
     },
     onError: (e: Error) => toast.error(toastError(e)),
   });
@@ -139,7 +143,10 @@ function MedicationRulesPage() {
             </DialogHeader>
             <div className="grid gap-4 py-3">
               <div className="grid gap-2">
-                <Label className={adminLabel}>Medicine A</Label>
+                <Label className={adminLabel}>
+                  Medicine A
+                  <RequiredMark />
+                </Label>
                 <Select value={a} onValueChange={setA}>
                   <SelectTrigger className={adminSelect}>
                     <SelectValue placeholder="Select a medicine" />
@@ -154,7 +161,10 @@ function MedicationRulesPage() {
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label className={adminLabel}>Medicine B</Label>
+                <Label className={adminLabel}>
+                  Medicine B
+                  <RequiredMark />
+                </Label>
                 <Select value={b} onValueChange={setB}>
                   <SelectTrigger className={adminSelect}>
                     <SelectValue placeholder="Select a medicine" />
@@ -171,7 +181,10 @@ function MedicationRulesPage() {
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label className={adminLabel}>Relationship</Label>
+                <Label className={adminLabel}>
+                  Relationship
+                  <RequiredMark />
+                </Label>
                 <Select value={type} onValueChange={(v) => setType(v as RelationshipType)}>
                   <SelectTrigger className={adminSelect}>
                     <SelectValue />
@@ -284,7 +297,12 @@ function MedicationRulesPage() {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-[#3B4759]/70 hover:bg-[#E8EEED] rounded-lg transition-colors"
-                      onClick={() => deleteMut.mutate(r.id)}
+                      onClick={() =>
+                        setDeleteTarget({
+                          id: r.id,
+                          label: `${r.medicine_a_name ?? "Medicine A"} and ${r.medicine_b_name ?? "Medicine B"}`,
+                        })
+                      }
                     >
                       <Trash2 className="h-4 w-4 stroke-[2.2]" />
                     </Button>
@@ -295,6 +313,16 @@ function MedicationRulesPage() {
           </Table>
         </div>
       </Card>
+      <ConfirmDeleteDialog
+        open={deleteTarget !== null}
+        title="Delete this rule?"
+        description={`This removes the restriction between ${deleteTarget?.label ?? "these medicines"}. Patients could be offered that combination again.`}
+        pending={deleteMut.isPending}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) deleteMut.mutate(deleteTarget.id);
+        }}
+      />
     </div>
   );
 }

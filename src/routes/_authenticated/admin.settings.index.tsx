@@ -22,10 +22,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { getSettings, updateSettings, type PlatformSettings } from "@/lib/settings.functions";
+import {
+  getSettings,
+  normalizeLifeFileContactPhone,
+  updateSettings,
+  type PlatformSettings,
+} from "@/lib/settings.functions";
 import { syncShippingBatch } from "@/lib/shipping-reprice.functions";
 import { ActivityLogTab } from "@/components/admin/activity-log-tab";
 import { DangerZoneTab } from "@/components/admin/danger-zone-tab";
+import { DeletedItemsCard } from "@/components/admin/deleted-items-card";
 import { OffersTab } from "@/components/admin/offers-tab";
 import {
   adminPageTitle,
@@ -57,6 +63,7 @@ type FormState = {
   referral_enabled: boolean;
   maintenance_mode: boolean;
   new_signups_enabled: boolean;
+  lifefile_contact_phone: string;
 };
 
 function centsToStr(cents: number) {
@@ -79,6 +86,7 @@ function toForm(s: PlatformSettings): FormState {
     referral_enabled: s.referral_enabled,
     maintenance_mode: s.maintenance_mode,
     new_signups_enabled: s.new_signups_enabled,
+    lifefile_contact_phone: s.lifefile_contact_phone,
   };
 }
 
@@ -308,6 +316,13 @@ function SettingsPage() {
       toast.error("Enter valid, non-negative amounts");
       return;
     }
+    let lifefileContactPhone = "";
+    try {
+      lifefileContactPhone = normalizeLifeFileContactPhone(form.lifefile_contact_phone);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Enter a valid pharmacy contact phone");
+      return;
+    }
     mutation.mutate({
       consultation_fee_cents: consultationCents,
       consultation_fee_enabled: form.consultation_fee_enabled,
@@ -317,6 +332,7 @@ function SettingsPage() {
       referral_enabled: form.referral_enabled,
       maintenance_mode: form.maintenance_mode,
       new_signups_enabled: form.new_signups_enabled,
+      lifefile_contact_phone: lifefileContactPhone,
     });
   }
 
@@ -412,6 +428,27 @@ function SettingsPage() {
                   checked={form.new_signups_enabled}
                   onChange={(v) => set("new_signups_enabled", v)}
                 />
+                <div className={`${adminCard} ${adminCardPad} space-y-3`}>
+                  <div className="space-y-0.5">
+                    <Label htmlFor="lifefile-contact-phone" className={adminLabel}>
+                      Pharmacy contact phone
+                    </Label>
+                    <p className="text-xs text-[#3B4759]/70">
+                      Sent to LifeFile on every order, for every patient and every pharmacy. The
+                      patient&apos;s own phone is not sent. Orders cannot go to the pharmacy until
+                      this number is saved.
+                    </p>
+                  </div>
+                  <Input
+                    id="lifefile-contact-phone"
+                    value={form.lifefile_contact_phone}
+                    onChange={(e) => set("lifefile_contact_phone", e.target.value)}
+                    inputMode="tel"
+                    autoComplete="tel"
+                    placeholder="e.g. (555) 555-1234"
+                    className={`${adminInput} max-w-xs`}
+                  />
+                </div>
               </>
             ) : (
               <p className="text-sm text-[#3B4759]/60">Loading…</p>
@@ -423,8 +460,9 @@ function SettingsPage() {
           <ActivityLogTab />
         </TabsContent>
 
-        <TabsContent value="danger" className="mt-4">
+        <TabsContent value="danger" className="mt-4 space-y-4">
           <DangerZoneTab />
+          <DeletedItemsCard />
         </TabsContent>
       </Tabs>
 

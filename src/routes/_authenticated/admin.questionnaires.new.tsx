@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { RequiredMark } from "@/components/admin/required-mark";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -92,7 +93,10 @@ function NewQuestionnairePage() {
         </CardHeader>
         <CardContent className="space-y-5 p-4 pt-0 sm:p-6 sm:pt-0">
           <div className="space-y-2">
-            <Label className={adminLabel}>Name</Label>
+            <Label className={adminLabel}>
+              Name
+              <RequiredMark />
+            </Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}

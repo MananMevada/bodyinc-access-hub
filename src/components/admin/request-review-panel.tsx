@@ -50,7 +50,8 @@ import {
   sendRequestToPharmacy,
 } from "@/lib/requests.functions";
 import { listProviders } from "@/lib/providers.functions";
-import { claimRequest } from "@/lib/provider.functions";
+import { claimRequest, escalateRequest, remindPlanChange, scheduleConsultation } from "@/lib/provider.functions";
+import { OrderWorkspace } from "@/components/provider/order-workspace";
 import {
   requestStatusLabel,
   requestStatusTone,
@@ -76,6 +77,7 @@ import {
   startRequestConsultation,
   finishConsultationAppointment,
 } from "@/lib/consultations.functions";
+import { recordConsultationOutcome } from "@/lib/requests.functions";
 import { formatCents, formatDateTimeFull, formatRecordId } from "@/lib/format";
 
 export function RequestReviewPanel({
@@ -107,6 +109,10 @@ export function RequestReviewPanel({
   const claim = useServerFn(claimRequest);
   const startConsult = useServerFn(startRequestConsultation);
   const finishConsult = useServerFn(finishConsultationAppointment);
+  const recordOutcome = useServerFn(recordConsultationOutcome);
+  const remindChange = useServerFn(remindPlanChange);
+  const escalate = useServerFn(escalateRequest);
+  const saveSchedule = useServerFn(scheduleConsultation);
 
   const q = useQuery({
     queryKey: ["request", requestId],
@@ -120,6 +126,7 @@ export function RequestReviewPanel({
   });
 
   const [changeOpen, setChangeOpen] = useState(false);
+  const [changeRequestId, setChangeRequestId] = useState<string | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
   const [rxOpen, setRxOpen] = useState(false);
@@ -136,6 +143,7 @@ export function RequestReviewPanel({
     .trim()
     .toUpperCase();
   const matchingProviders = ((providersQ.data as any[]) ?? []).filter((p) => {
+    if (p.is_unavailable) return false;
     const states = ((p.license_states ?? []) as string[]).map((s) => String(s).toUpperCase());
     return patientState ? states.includes(patientState) : false;
   });
@@ -206,6 +214,57 @@ export function RequestReviewPanel({
     },
   });
 
+  const outcomeMut = useMutation({
+    mutationFn: (outcome: "no_show" | "call_dropped" | "reschedule") =>
+      recordOutcome({
+        data: {
+          requestId,
+          outcome,
+          note:
+            outcome === "reschedule"
+              ? "Provider asked to reschedule this visit."
+              : undefined,
+        },
+      }),
+    onSuccess: () => {
+      toast.success("Consultation update saved.");
+      refresh();
+    },
+    onError: (e: Error) => toast.error(toastError(e)),
+  });
+
+  const escalateMut = useMutation({
+    mutationFn: () => escalate({ data: { requestId } }),
+    onSuccess: () => {
+      toast.success("Order returned to the unassigned queue.");
+      navigate({ to: backTo });
+    },
+    onError: (e: Error) => toast.error(toastError(e)),
+  });
+
+  const scheduleMut = useMutation({
+    mutationFn: (input: { mode: "instant" | "scheduled"; scheduledAt?: string }) =>
+      saveSchedule({ data: { requestId, mode: input.mode, scheduledAt: input.scheduledAt } }),
+    onSuccess: () => {
+      toast.success("Consultation schedule saved.");
+      refresh();
+    },
+    onError: (e: Error) => toast.error(toastError(e)),
+  });
+
+  const remindMut = useMutation({
+    mutationFn: () => remindChange({ data: { requestId } }),
+    onSuccess: (res) => {
+      toast.success(
+        res?.email_sent
+          ? "Reminder sent to the patient."
+          : "A reminder was already sent today.",
+      );
+      refresh();
+    },
+    onError: (e: Error) => toast.error(toastError(e)),
+  });
+
   const finishConsultMut = useMutation({
     mutationFn: () => finishConsult({ data: { requestId } }),
     onSuccess: (res) => {
@@ -213,7 +272,8 @@ export function RequestReviewPanel({
         toast.error(res.message);
         return;
       }
-      toast.success("Consultation concluded successfully.");
+      toast.success(res.message || "Consultation concluded successfully.");
+      if (res.pharmacy_error) toast.error(res.pharmacy_error);
       setFinishOpen(false);
       refresh();
     },
@@ -240,7 +300,12 @@ export function RequestReviewPanel({
         refresh();
         return;
       }
-      toastActionWithEmail("Order approved and sent to LifeFile.", res?.email_sent);
+      toastActionWithEmail(
+        res?.status === "approved"
+          ? "Order approved."
+          : "Order approved and sent to the pharmacy.",
+        res?.email_sent,
+      );
       setApproveOpen(false);
       setApproveNote("");
       refresh();
@@ -360,6 +425,18 @@ export function RequestReviewPanel({
     prescriptions,
     additional_payments,
   } = q.data as any;
+  const orderItems = ((q.data as any).order_items ?? []) as {
+    id: string;
+    medicine_id: string | null;
+    medicine_name: string;
+    variant_id: string | null;
+    package_id: string | null;
+    plan_name: string | null;
+    status: string;
+    provider_id: string | null;
+  }[];
+  const changeLine =
+    orderItems.find((line) => line.id === (changeRequestId ?? requestId)) ?? null;
 
   const status: string = request.status;
   const isUnassigned = !provider;
@@ -372,9 +449,11 @@ export function RequestReviewPanel({
     ["pending_review", "approved", "awaiting_additional_payment"].includes(status) &&
     (!clinicalOnly || !isUnassigned);
   const canGenerate = status === "approved" && canManage;
+  const intakeFilled = Boolean((q.data as any)?.intake?.filled);
   const canStartConsult =
     canManage &&
     Boolean(request.user_id) &&
+    (!clinicalOnly || intakeFilled) &&
     !["rejected", "delivered", "canceled", "cancelled"].includes(status);
   const lifeFileOrderId =
     (request as { life_file_order_id?: string | null }).life_file_order_id ||
@@ -387,15 +466,19 @@ export function RequestReviewPanel({
   const sentToLifeFile =
     ["sent_to_pharmacy", "dispatched", "delivered"].includes(status) ||
     (Boolean(lifeFileOrderId) && lifeFileStatus !== "failed");
+  const consultBlocking =
+    clinicalOnly && Boolean(request.requires_consultation) && !consultation?.is_ended;
   const canApprove =
     clinicalOnly &&
     !isUnassigned &&
-    !sentToLifeFile &&
-    ["pending_review", "approved", "prescribed"].includes(status);
+    intakeFilled &&
+    !consultBlocking &&
+    status === "pending_review";
   const canRetryLifeFile = lifeFileStatus === "failed" && canManage;
   const canSendToPharmacy =
     canManage &&
     !sentToLifeFile &&
+    lifeFileStatus !== "submitting" &&
     (["approved", "prescribed"].includes(status) ||
       (status === "pending_review" && lifeFileStatus === "failed"));
   const nextStep =
@@ -412,6 +495,52 @@ export function RequestReviewPanel({
 
   return (
     <div className="admin-page-shell space-y-5 sm:space-y-6 font-['DM_Sans',sans-serif]">
+      {clinicalOnly ? (
+        <OrderWorkspace
+          requestId={requestId}
+          backTo={backTo}
+          request={request}
+          patient={patient}
+          medicine={medicine}
+          planName={pkg?.name ?? null}
+          providerName={provider?.full_name ?? null}
+          consultation={consultation}
+          events={events}
+          prescriptions={prescriptions}
+          intake={(q.data as any).intake ?? null}
+          pastOrders={(q.data as any).past_orders ?? []}
+          orderItems={orderItems}
+          canClaim={canClaim}
+          canChange={canChange}
+          canReject={canReject}
+          claimPending={claimMut.isPending}
+          consultPending={consultMut.isPending}
+          outcomePending={outcomeMut.isPending}
+          remindPending={remindMut.isPending}
+          onClaim={() => claimMut.mutate()}
+          onJoin={() => consultMut.mutate()}
+          onApprove={() => setApproveOpen(true)}
+          onChange={() => {
+            setChangeRequestId(requestId);
+            setChangeOpen(true);
+          }}
+          onChangeItem={(id) => {
+            setChangeRequestId(id);
+            setChangeOpen(true);
+          }}
+          onReject={() => setRejectOpen(true)}
+          onPrescribe={() => setRxOpen(true)}
+          onSend={() => setSendPharmacyOpen(true)}
+          onOutcome={(outcome) => outcomeMut.mutate(outcome)}
+          onRemind={() => remindMut.mutate()}
+          onEscalate={() => escalateMut.mutate()}
+          onSchedule={(mode, scheduledAt) => scheduleMut.mutate({ mode, scheduledAt })}
+          escalatePending={escalateMut.isPending}
+          schedulePending={scheduleMut.isPending}
+        />
+      ) : null}
+      {!clinicalOnly ? (
+      <>
       <Link
         to={backTo}
         className="inline-flex h-9 items-center -ml-1 px-1 text-[14px] font-medium text-[#3B4759] hover:opacity-80"
@@ -423,19 +552,27 @@ export function RequestReviewPanel({
         <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 p-4 sm:p-6">
           <div className="min-w-0 space-y-1.5">
             <CardTitle className={`${adminSectionTitle} font-mono text-[15px] sm:text-[17px]`}>
-              {formatRecordId(request.id)}
+              Order ID {formatRecordId(request.id)}
             </CardTitle>
             <CardDescription className={adminSectionSubtitle}>
               {request.kind === "followup" ? "Renewal order" : "Initial order"} ·{" "}
               {formatDateTimeFull(request.created_at)}
             </CardDescription>
+            <p
+              className="font-mono text-[11px] text-[#3B4759]/55 select-all"
+              title="Full request UUID for ops / deep links"
+            >
+              Request UUID: {request.id}
+            </p>
           </div>
           <Badge
             className={`rounded-lg border border-transparent px-2.5 py-0.5 text-[12px] font-semibold normal-case tracking-normal shadow-none ${
               REQUEST_STATUS_BADGE[requestStatusTone(status)]
             }`}
           >
-            {clinicalOnly ? clinicalStatusLabel(status) : requestStatusLabel(status)}
+            {clinicalOnly
+              ? clinicalStatusLabel(status, request.plan_change_delta_cents)
+              : requestStatusLabel(status, request.plan_change_delta_cents)}
           </Badge>
         </CardHeader>
         <CardContent className="space-y-4 p-4 pt-0 sm:p-6 sm:pt-0">
@@ -447,8 +584,22 @@ export function RequestReviewPanel({
             {clinicalOnly ? null : <Row label="Email" value={patient?.email ?? "—"} />}
             <Row label="State" value={patient?.state_code ?? "—"} />
             <Row label="Assigned provider" value={provider?.full_name ?? "Unassigned"} />
-            <Row label="Medication" value={medicine?.name ?? "—"} />
-            <Row label="Plan" value={pkg?.name ?? "—"} />
+            <Row
+              label="Medication"
+              value={
+                orderItems.length > 1
+                  ? orderItems.map((line) => line.medicine_name).join(", ")
+                  : (medicine?.name ?? "—")
+              }
+            />
+            <Row
+              label="Plan"
+              value={
+                orderItems.length > 1
+                  ? orderItems.map((line) => line.plan_name || "Plan").join(", ")
+                  : (pkg?.name ?? "—")
+              }
+            />
             {clinicalOnly ? null : (
               <Row
                 label="Plan price"
@@ -508,7 +659,21 @@ export function RequestReviewPanel({
                 }
               />
             ) : null}
-            {lifeFileOrderId ? <Row label="Life File order ID" value={lifeFileOrderId} /> : null}
+            {lifeFileOrderId ? (
+              <Row
+                label="Life File order ID"
+                value={
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
+                    <span>{lifeFileOrderId}</span>
+                    {request.life_file_submitted_at ? (
+                      <span className="text-[12px] font-medium text-[#3B4759]/70">
+                        {formatDateTimeFull(request.life_file_submitted_at)}
+                      </span>
+                    ) : null}
+                  </span>
+                }
+              />
+            ) : null}
             {lifeFileError ? (
               <div className="sm:col-span-2 space-y-1">
                 <div className="text-[13px] font-medium text-[#3B4759]/60">LifeFile error</div>
@@ -517,7 +682,54 @@ export function RequestReviewPanel({
             ) : null}
           </div>
 
-          {canManage ? (
+          {orderItems.length > 1 ? (
+            <div className="space-y-2 rounded-lg border border-[#D5DEDD] p-3">
+              <div className="text-[13px] font-semibold text-[#152A51]">Medicines in this order</div>
+              <p className="text-[12px] text-[#3B4759]/70">
+                Purchased together. One consultation covers every medicine. Change a line when that
+                plan needs to be different.
+              </p>
+              {orderItems.map((line) => (
+                <div
+                  key={line.id}
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-[#E8EEED] pt-2"
+                >
+                  <div>
+                    <div className="text-[14px] font-medium text-[#3B4759]">{line.medicine_name}</div>
+                    <div className="text-[12px] text-[#3B4759]/60">
+                      {line.plan_name ?? "Plan"} · {requestStatusLabel(line.status)}
+                    </div>
+                  </div>
+                  {["pending_review", "approved", "awaiting_additional_payment"].includes(
+                    line.status,
+                  ) ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setChangeRequestId(line.id);
+                        setChangeOpen(true);
+                      }}
+                    >
+                      Change
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {canManage && consultation?.is_ended ? (
+            <div className="border-t border-[#D5DEDD] pt-4">
+              <p className="text-[13px] font-medium text-[#3B4759]">
+                Assigned provider: {provider?.full_name ?? "Unassigned"}
+              </p>
+              <p className="mt-1 text-[13px] text-[#3B4759]/70">
+                The consultation is already complete, so the provider cannot be changed.
+              </p>
+            </div>
+          ) : canManage ? (
             <div className="flex flex-wrap items-end gap-2 border-t border-[#D5DEDD] pt-4">
               <div className="min-w-[220px] space-y-1">
                 <div className="text-[13px] font-medium text-[#3B4759]/60">
@@ -599,13 +811,13 @@ export function RequestReviewPanel({
             ) : null}
             {needsProviderAssignment ? (
               <p className="w-full text-[13px] font-medium text-[#3B4759]/80">
-                Please assign a provider. When they approve, the order is sent to the pharmacy.
+                Please assign a provider. They approve, generate the prescription, then send the order to the pharmacy.
               </p>
             ) : null}
             {waitingOnProvider ? (
               <p className="w-full text-[13px] font-medium text-[#3B4759]/80">
-                Waiting for the assigned provider to approve. Approval sends the order to the
-                pharmacy. You can still send it from here if that does not go through.
+                Waiting for the assigned provider to approve, prescribe, and send the order to the
+                pharmacy. You can still send it from here once a prescription exists.
               </p>
             ) : null}
             {!sentToLifeFile && lifeFileError ? (
@@ -647,7 +859,7 @@ export function RequestReviewPanel({
                 onClick={() => setRxOpen(true)}
                 className="h-10 bg-[#6A9B9C] px-4 text-[13px] font-semibold text-white hover:bg-[#5B8788]"
               >
-                <FileText className="mr-1 h-4 w-4" /> Generate prescription
+                <FileText className="mr-1 h-4 w-4" /> Prescribe
               </Button>
             ) : null}
             {canRetryLifeFile ? (
@@ -724,7 +936,7 @@ export function RequestReviewPanel({
                   ) : (
                     <>
                       <Video className="mr-1.5 h-4 w-4" />
-                      Join live consultation
+                      Join consultation
                     </>
                   )}
                 </Button>
@@ -752,7 +964,7 @@ export function RequestReviewPanel({
                 </Button>
               </div>
             ) : null}
-            {canManage && request.session_id ? (
+            {canManage && request.session_id && intakeFilled ? (
               <Button
                 asChild
                 size="sm"
@@ -769,11 +981,17 @@ export function RequestReviewPanel({
             ) : null}
           </div>
 
+          {!intakeFilled ? (
+            <p className="rounded-lg bg-[#F6E4DA] px-3 py-2 text-[13px] font-medium text-[#8F4A33]">
+              Intake incomplete. The form for this order has not been submitted.
+            </p>
+          ) : null}
           {status === "awaiting_additional_payment" ? (
             <p className="rounded-lg bg-[#FFF4E5] px-3 py-2 text-[13px] font-medium text-[#B45309]">
-              {clinicalOnly
-                ? "Waiting for the patient to confirm the new plan. The prescription can be generated after they confirm."
-                : "Waiting for the patient to pay the price difference. The prescription can be generated once payment succeeds."}
+              {request.plan_change_delta_cents != null &&
+              Number(request.plan_change_delta_cents) <= 0
+                ? "Waiting for the patient to approve or reject this change. Approval sends it to the pharmacy. A rejection, or no response within 7 days, restores the previous medicine and plan."
+                : "Waiting for the patient to pay the price difference. The updated order is sent to the pharmacy automatically once payment succeeds."}
             </p>
           ) : null}
         </CardContent>
@@ -877,19 +1095,21 @@ export function RequestReviewPanel({
           </ol>
         </CardContent>
       </Card>
+      </>
+      ) : null}
 
       <RequestChangeMedicineDialog
-        requestId={requestId}
+        requestId={changeLine?.id ?? requestId}
         open={changeOpen}
         onOpenChange={setChangeOpen}
         onChanged={refresh}
         hideFinancial={clinicalOnly}
-        currentMedicineId={medicine?.id ?? request.medicine_id ?? null}
-        currentVariantId={request.variant_id ?? null}
-        currentPackageId={pkg?.id ?? request.package_id ?? null}
+        currentMedicineId={changeLine?.medicine_id ?? medicine?.id ?? request.medicine_id ?? null}
+        currentVariantId={changeLine?.variant_id ?? request.variant_id ?? null}
+        currentPackageId={changeLine?.package_id ?? pkg?.id ?? request.package_id ?? null}
         current={{
-          medicineName: medicine?.name ?? null,
-          planName: pkg?.name ?? null,
+          medicineName: changeLine?.medicine_name ?? medicine?.name ?? null,
+          planName: changeLine?.plan_name ?? pkg?.name ?? null,
           price: clinicalOnly ? null : pkg?.price != null ? Number(pkg.price) : null,
         }}
       />
@@ -906,7 +1126,9 @@ export function RequestReviewPanel({
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1">
-            <label className="text-[13px] font-medium text-[#3B4759]">Reason (optional)</label>
+            <label className="text-[13px] font-medium text-[#3B4759]">
+              {clinicalOnly ? "Reason (required)" : "Reason (optional)"}
+            </label>
             <Textarea
               value={rejectNote}
               onChange={(e) => setRejectNote(e.target.value)}
@@ -920,7 +1142,7 @@ export function RequestReviewPanel({
             </Button>
             <Button
               onClick={() => rejectMut.mutate()}
-              disabled={rejectMut.isPending}
+              disabled={rejectMut.isPending || (clinicalOnly && rejectNote.trim().length < 10)}
               className="bg-[#8F4A33] text-white hover:bg-[#8F4A33]"
             >
               {rejectMut.isPending ? "Rejecting…" : clinicalOnly ? "Reject" : "Reject & refund"}
@@ -935,8 +1157,7 @@ export function RequestReviewPanel({
           <DialogHeader>
             <DialogTitle>Approve order</DialogTitle>
             <DialogDescription>
-              Clinically approve this order for {medicine?.name ?? "this medication"}. It is sent to
-              the pharmacy when you approve. Admin can send it again only if that send fails.
+              Approve this order for {medicine?.name ?? "this medication"}.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1">
@@ -988,15 +1209,15 @@ export function RequestReviewPanel({
         </DialogContent>
       </Dialog>
 
-      {/* Generate prescription */}
+      {/* Prescribe */}
       <Dialog open={rxOpen} onOpenChange={setRxOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Generate prescription</DialogTitle>
+            <DialogTitle>Prescribe</DialogTitle>
             <DialogDescription>
-              Creates the prescription for {medicine?.name ?? "this medication"}, visible to the
-              patient, provider, and admin. These directions are sent to the pharmacy. For a Life
-              File test order, include: Test Order Do Not Fill.
+              Write the prescription for {medicine?.name ?? "this medication"}. The patient is
+              notified. Send it to the pharmacy after this step. For a test order, include: Test
+              Order Do Not Fill.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1">
@@ -1013,7 +1234,7 @@ export function RequestReviewPanel({
               Cancel
             </Button>
             <Button onClick={() => generateMut.mutate()} disabled={generateMut.isPending}>
-              {generateMut.isPending ? "Generating…" : "Generate"}
+              {generateMut.isPending ? "Saving…" : "Prescribe"}
             </Button>
           </DialogFooter>
         </DialogContent>

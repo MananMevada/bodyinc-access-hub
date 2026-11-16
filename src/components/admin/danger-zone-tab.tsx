@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
+import { toastError } from "@/lib/toast-message";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,16 +46,14 @@ export function DangerZoneTab() {
       const res = await wipeFn({ data: { groups: selected } });
       const total = Object.values(res.deleted).reduce((a, b) => a + b, 0);
       toast.success(
-        `Deleted ${total} record${total === 1 ? "" : "s"} across ${res.groups.length} area${
-          res.groups.length === 1 ? "" : "s"
-        }.`,
+        `Removed ${total} record${total === 1 ? "" : "s"} from the live system. A backup was stored.`,
       );
       setOpen(false);
       setSelected([]);
       setConfirmText("");
       qc.invalidateQueries();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
+      toast.error(toastError(e));
     } finally {
       setRunning(false);
     }
@@ -67,8 +66,9 @@ export function DangerZoneTab() {
       <div className="space-y-1">
         <h3 className="text-[16px] font-bold text-destructive">Delete platform data</h3>
         <p className="text-xs text-muted-foreground">
-          Permanently removes the selected data from the database. Admin users and
-          platform settings are never touched, and nothing is changed in Stripe.
+          Removes the selected data from the live system and stores a copy in the backup.
+          Cleared data is not shown in the app. Admin users and platform settings are never
+          touched, and nothing is changed in Stripe.
         </p>
       </div>
 
@@ -128,11 +128,11 @@ export function DangerZoneTab() {
         <AlertDialogContent className="rounded-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-destructive">
-              This permanently deletes data
+              This clears data from the live system
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3 text-sm text-muted-foreground">
-                <p>The following will be erased and cannot be recovered:</p>
+                <p>The following will be removed from the live system and stored in the backup:</p>
                 <ul className="list-disc space-y-1 pl-5">
                   {expanded.map((k) => (
                     <li key={k}>
@@ -165,7 +165,7 @@ export function DangerZoneTab() {
               onClick={() => void run()}
               className="rounded-xl"
             >
-              {running ? "Deleting…" : "Delete permanently"}
+              {running ? "Clearing…" : "Clear from live system"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

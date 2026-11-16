@@ -14,6 +14,17 @@ export type LifeFileSubmitResult = {
   pharmacyName: string | null;
 };
 
+export const LIFE_FILE_ALREADY_SENT_ERROR =
+  "This order was already submitted to LifeFile. Duplicate submissions are blocked.";
+export const LIFE_FILE_IN_FLIGHT_ERROR = "This order is already being sent to LifeFile.";
+
+/** Lost a race with another send. "sent" already has an order id. "in_flight" is still calling Life File. */
+export function lifeFileSendBlocked(message: string): "sent" | "in_flight" | null {
+  if (message.includes("already being sent to LifeFile")) return "in_flight";
+  if (message.includes("already submitted to LifeFile")) return "sent";
+  return null;
+}
+
 type RequestRow = {
   id: string;
   status: string;
@@ -52,6 +63,14 @@ export async function assertLifeFileReady(
   if (!(routing.credentialNpi || provider.npi)) {
     throw new Error("Provider NPI is required for Life File.");
   }
+
+  const { readLifeFileContactPhone } = await import("@/lib/settings.functions");
+  const contactPhone = await readLifeFileContactPhone(supabaseAdmin);
+  if (!contactPhone) {
+    throw new Error(
+      "Set the pharmacy contact phone in Admin → Settings before sending to the pharmacy.",
+    );
+  }
 }
 
 export async function submitRequestToLifeFile(
@@ -59,10 +78,8 @@ export async function submitRequestToLifeFile(
   req: RequestRow,
   options: { allowRetry?: boolean } = {},
 ): Promise<LifeFileSubmitResult> {
-  if (req.life_file_order_id && req.life_file_status && req.life_file_status !== "failed") {
-    throw new Error(
-      "This order was already submitted to LifeFile. Duplicate submissions are blocked.",
-    );
+  if (req.life_file_order_id) {
+    throw new Error(LIFE_FILE_ALREADY_SENT_ERROR);
   }
 
   if (!options.allowRetry && req.life_file_status === "failed" && req.life_file_order_id) {
@@ -80,7 +97,7 @@ export async function submitRequestToLifeFile(
     supabaseAdmin
       .from("profiles")
       .select(
-        "full_name, dob, sex, email, phone, street_address, apartment, city, state_code, postal_code, country",
+        "full_name, dob, sex, email, street_address, apartment, city, state_code, postal_code, country",
       )
       .eq("id", req.user_id)
       .maybeSingle(),
@@ -91,7 +108,7 @@ export async function submitRequestToLifeFile(
       .maybeSingle(),
     supabaseAdmin
       .from("prescriptions")
-      .select("id, medicine_name, directions, medicine_id, variant_id, created_at")
+      .select("id, medicine_name, directions, medicine_id, variant_id, package_id, created_at")
       .eq("request_id", req.id)
       .order("created_at", { ascending: false })
       .limit(1),
@@ -101,7 +118,7 @@ export async function submitRequestToLifeFile(
   if (!provider) throw new Error("Provider record not found.");
   const prescriptionRow = Array.isArray(prescription) ? prescription[0] : prescription;
   if (!prescriptionRow) {
-    throw new Error("Prescription not found. Generate the prescription first.");
+    throw new Error("Prescribe first, then send to the pharmacy.");
   }
 
   const { data: providerProfile } = await supabaseAdmin
@@ -138,16 +155,48 @@ export async function submitRequestToLifeFile(
     throw new Error("Provider NPI is required for Life File.");
   }
 
+  const { data: requestPlan } = await supabaseAdmin
+    .from("medication_requests")
+    .select("package_id")
+    .eq("id", req.id)
+    .maybeSingle();
+  const packageId = requestPlan?.package_id ?? prescriptionRow.package_id ?? null;
+  let quantity: number | null = null;
+  if (packageId) {
+    const { data: plan } = await supabaseAdmin
+      .from("packages")
+      .select("duration_months")
+      .eq("id", packageId)
+      .maybeSingle();
+    const months = Number(plan?.duration_months);
+    if (Number.isFinite(months) && months >= 1) quantity = Math.round(months);
+  }
+  if (!quantity) {
+    throw new Error(
+      "This order has no plan length, so the pharmacy quantity cannot be set. A 1-month plan sends 1, a 2-month plan sends 2, and a 3-month plan sends 3.",
+    );
+  }
+
+  const { readLifeFileContactPhone } = await import("@/lib/settings.functions");
+  const contactPhone = await readLifeFileContactPhone(supabaseAdmin);
+  if (!contactPhone) {
+    throw new Error(
+      "Set the pharmacy contact phone in Admin → Settings before sending to the pharmacy.",
+    );
+  }
+
+  await claimLifeFileSend(supabaseAdmin, req.id);
+
   try {
     const lifeFileResponse = await createLifeFileOrder({
       requestId: req.id,
       config: routing.config,
+      contactPhone,
       patient: {
         fullName: patient.full_name,
         dob: patient.dob,
         sex: patient.sex,
         email: patient.email,
-        phone: patient.phone,
         streetAddress: patient.street_address,
         apartment: patient.apartment,
         city: patient.city,
@@ -168,6 +217,7 @@ export async function submitRequestToLifeFile(
         medicineName: medicineLabel,
         directions: prescriptionRow.directions,
         lfProductID: routing.lfProductId,
+        quantity,
       },
     });
 
@@ -178,7 +228,7 @@ export async function submitRequestToLifeFile(
       );
     }
 
-    await supabaseAdmin
+    const { data: saved } = await supabaseAdmin
       .from("medication_requests")
       .update({
         life_file_status: "submitted",
@@ -188,7 +238,26 @@ export async function submitRequestToLifeFile(
         life_file_submitted_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
-      .eq("id", req.id);
+      .eq("id", req.id)
+      .or(`life_file_order_id.is.null,life_file_order_id.eq."${lifeFileOrderId}"`)
+      .select("life_file_order_id")
+      .maybeSingle();
+    if (!saved) {
+      const { data: existing } = await supabaseAdmin
+        .from("medication_requests")
+        .select("life_file_order_id")
+        .eq("id", req.id)
+        .maybeSingle();
+      const kept = existing?.life_file_order_id;
+      if (kept) {
+        return {
+          lifeFileOrderId: kept,
+          pharmacyId: routing.pharmacyId,
+          pharmacyName: routing.pharmacyName,
+        };
+      }
+      throw new Error("Life File returned an order id, but it could not be saved.");
+    }
 
     return {
       lifeFileOrderId,
@@ -205,9 +274,30 @@ export async function submitRequestToLifeFile(
         life_file_pharmacy_id: routing.pharmacyId,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", req.id);
+      .eq("id", req.id)
+      .eq("life_file_status", "submitting")
+      .is("life_file_order_id", null);
     throw error;
   }
+}
+
+/** Lock the row so a second confirmation cannot create another Life File order. */
+async function claimLifeFileSend(supabaseAdmin: SupabaseClient, requestId: string): Promise<void> {
+  const { data, error } = await supabaseAdmin.rpc("claim_life_file_submission", {
+    p_request_id: requestId,
+  });
+  if (error) {
+    if (/claim_life_file_submission|does not exist|schema cache/i.test(error.message)) {
+      throw new Error(
+        "Pharmacy send is waiting for the latest database update. Apply it, then send again.",
+      );
+    }
+    throw new Error(error.message);
+  }
+  if (data === "claimed") return;
+  if (data === "in_progress") throw new Error(LIFE_FILE_IN_FLIGHT_ERROR);
+  if (data === "missing") throw new Error("Request not found.");
+  throw new Error(LIFE_FILE_ALREADY_SENT_ERROR);
 }
 
 async function resolveLifeFileRouting(
@@ -232,7 +322,7 @@ async function resolveLifeFileRouting(
   let productQuery = supabaseAdmin
     .from("medicine_life_file_products")
     .select(
-      "id, pharmacy_id, lf_product_id, variant_id, is_active, life_file_pharmacies(id, name, api_base_url, vendor_id, location_id, api_network_id, is_active)",
+      "id, pharmacy_id, lf_product_id, variant_id, is_active, life_file_pharmacies(id, name, api_base_url, api_username, api_password, vendor_id, location_id, api_network_id, practice_id, is_active)",
     )
     .eq("medicine_id", args.medicineId)
     .eq("is_active", true);
@@ -245,6 +335,11 @@ async function resolveLifeFileRouting(
 
   const { data: products, error: productsError } = await productQuery;
   if (productsError) {
+    if (/api_username|api_password|practice_id/i.test(productsError.message)) {
+      throw new Error(
+        "LifeFile pharmacy logins are not ready yet. Apply the latest database update, then add the API username, password, and practice ID under LifeFile Pharmacies.",
+      );
+    }
     // Table may not exist yet in environments that have not migrated — fall back to legacy.
     if (/medicine_life_file_products|does not exist|schema cache/i.test(productsError.message)) {
       return resolveLegacyRouting(supabaseAdmin, args);
@@ -254,8 +349,9 @@ async function resolveLifeFileRouting(
 
   const rows = (products ?? []) as any[];
   if (rows.length === 0) {
-    // Fall back to medicines/variants.lf_product_id + env credentials.
-    return resolveLegacyRouting(supabaseAdmin, args);
+    throw new Error(
+      "This medicine is not linked to a LifeFile pharmacy. On the medicine, choose the pharmacy and product ID, then send again.",
+    );
   }
 
   if (rows.length > 1) {
@@ -285,29 +381,17 @@ async function resolveLifeFileRouting(
     );
   }
 
-  const { data: cred, error: credError } = await supabaseAdmin
-    .from("provider_life_file_credentials")
-    .select(
-      "api_base_url, api_username, api_password, provider_life_file_id, practice_id, npi, is_active",
-    )
-    .eq("provider_id", args.providerId)
-    .eq("pharmacy_id", pharmacy.id)
-    .maybeSingle();
-
-  if (credError && !/provider_life_file_credentials|does not exist|schema cache/i.test(credError.message)) {
-    throw new Error(credError.message);
-  }
-
-  if (!cred || cred.is_active === false) {
+  const apiUsername = String(pharmacy.api_username ?? "").trim();
+  const apiPassword = String(pharmacy.api_password ?? "");
+  const practiceId = Number(pharmacy.practice_id);
+  if (!apiUsername || !apiPassword.trim()) {
     throw new Error(
-      `LifeFile configuration is missing for this provider and pharmacy (${pharmacy.name}).`,
+      `LifeFile login is missing for ${pharmacy.name}. Add the API username and password under LifeFile Pharmacies.`,
     );
   }
-
-  const practiceId = Number(cred.practice_id);
   if (!Number.isFinite(practiceId) || practiceId <= 0) {
     throw new Error(
-      `LifeFile practice ID is missing for this provider and pharmacy (${pharmacy.name}).`,
+      `Practice ID is missing for ${pharmacy.name}. Add it under LifeFile Pharmacies.`,
     );
   }
 
@@ -320,7 +404,7 @@ async function resolveLifeFileRouting(
     );
   }
 
-  const baseUrl = String(cred.api_base_url || pharmacy.api_base_url || "").trim();
+  const baseUrl = String(pharmacy.api_base_url || "").trim();
   if (!baseUrl || baseUrl.includes("example.invalid")) {
     throw new Error(
       `Pharmacy "${pharmacy.name}" has no valid API URL. Update it under Admin → LifeFile Pharmacies.`,
@@ -331,12 +415,12 @@ async function resolveLifeFileRouting(
     pharmacyId: pharmacy.id,
     pharmacyName: pharmacy.name,
     lfProductId,
-    providerLifeFileId: cred.provider_life_file_id ?? null,
-    credentialNpi: cred.npi ?? null,
+    providerLifeFileId: null,
+    credentialNpi: null,
     config: {
       baseUrl,
-      apiUsername: cred.api_username,
-      apiPassword: cred.api_password,
+      apiUsername,
+      apiPassword,
       vendorId,
       locationId,
       apiNetworkId,
@@ -392,44 +476,6 @@ async function resolveLegacyRouting(
     throw new Error("Pharmacy configuration is missing for this medicine.");
   }
 
-  // Prefer provider credentials against any active pharmacy if present; else env.
-  const { data: anyCred } = await supabaseAdmin
-    .from("provider_life_file_credentials")
-    .select(
-      "api_base_url, api_username, api_password, provider_life_file_id, practice_id, npi, is_active, pharmacy_id, life_file_pharmacies(id, name, api_base_url, vendor_id, location_id, api_network_id, is_active)",
-    )
-    .eq("provider_id", args.providerId)
-    .eq("is_active", true)
-    .limit(1)
-    .maybeSingle();
-
-  if (anyCred) {
-    const pharmacy = Array.isArray((anyCred as any).life_file_pharmacies)
-      ? (anyCred as any).life_file_pharmacies[0]
-      : (anyCred as any).life_file_pharmacies;
-    const practiceId = Number(anyCred.practice_id);
-    if (pharmacy?.is_active !== false && Number.isFinite(practiceId) && practiceId > 0) {
-      return {
-        pharmacyId: pharmacy?.id ?? anyCred.pharmacy_id ?? null,
-        pharmacyName: pharmacy?.name ?? null,
-        lfProductId,
-        providerLifeFileId: anyCred.provider_life_file_id ?? null,
-        credentialNpi: anyCred.npi ?? null,
-        config: {
-          baseUrl: String(anyCred.api_base_url || pharmacy?.api_base_url || "").trim(),
-          apiUsername: anyCred.api_username,
-          apiPassword: anyCred.api_password,
-          vendorId: String(pharmacy?.vendor_id ?? process.env.LIFE_FILE_VENDOR_ID ?? "").trim(),
-          locationId: String(pharmacy?.location_id ?? process.env.LIFE_FILE_LOCATION_ID ?? "").trim(),
-          apiNetworkId: String(
-            pharmacy?.api_network_id ?? process.env.LIFE_FILE_API_NETWORK_ID ?? "",
-          ).trim(),
-          practiceId,
-        },
-      };
-    }
-  }
-
   try {
     return {
       pharmacyId: null,
@@ -441,7 +487,7 @@ async function resolveLegacyRouting(
     };
   } catch {
     throw new Error(
-      "LifeFile configuration is missing for this provider and pharmacy. Add pharmacy credentials on the provider, or set LIFE_FILE_* env vars.",
+      "LifeFile configuration is missing. Link the medicine to a pharmacy under LifeFile Pharmacies.",
     );
   }
 }

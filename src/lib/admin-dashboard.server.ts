@@ -1,6 +1,8 @@
 // Aggregation for the admin dashboard. Kept out of the *.functions.ts wrapper so the
 // server-function module stays a thin, splittable shell.
 
+import { clusterPurchases, leadOf } from "@/lib/order-groups";
+
 const OPEN_STATUSES = [
   "payment_completed",
   "provider_assigned",
@@ -55,7 +57,9 @@ export async function buildAdminDashboard(supabaseAdmin: any, days: number) {
       supabaseAdmin.from("user_roles").select("user_id").eq("role", "patient").limit(5000),
       supabaseAdmin
         .from("medication_requests")
-        .select("id, status, provider_id, medicine_id, user_id, session_id, created_at")
+        .select(
+          "id, status, provider_id, medicine_id, user_id, session_id, kind, created_at, order_group_id",
+        )
         .order("created_at", { ascending: false })
         .limit(2000),
       supabaseAdmin.from("subscriptions").select("status").limit(5000),
@@ -133,8 +137,9 @@ export async function buildAdminDashboard(supabaseAdmin: any, days: number) {
   // Attention queues
   const nowISO = now.toISOString();
   const attention = {
-    unassigned: requests.filter((r) => !r.provider_id && UNASSIGNED_STATUSES.includes(r.status))
-      .length,
+    unassigned: clusterPurchases(
+      requests.filter((r) => !r.provider_id && UNASSIGNED_STATUSES.includes(r.status)) as any[],
+    ).length,
     pending_review: requests.filter((r) => r.status === "pending_review").length,
     awaiting_payment: requests.filter((r) => r.status === "awaiting_additional_payment").length,
     failed_payments: payments.filter((p) => p.status === "failed" && inWindow(p.created_at)).length,
@@ -143,8 +148,14 @@ export async function buildAdminDashboard(supabaseAdmin: any, days: number) {
     open_orders: requests.filter((r) => OPEN_STATUSES.includes(r.status)).length,
   };
 
-  // Recent requests, enriched with medicine + patient names
-  const recentRaw = requests.slice(0, 8);
+  // Recent purchases, one row per checkout even when it contains several medicines.
+  const recentGroups = clusterPurchases(requests as any[])
+    .sort(
+      (a, b) =>
+        new Date(b[0]?.created_at ?? 0).getTime() - new Date(a[0]?.created_at ?? 0).getTime(),
+    )
+    .slice(0, 8);
+  const recentRaw = recentGroups.map((members) => leadOf(members));
   const medIds = Array.from(
     new Set(
       requests
@@ -187,16 +198,26 @@ export async function buildAdminDashboard(supabaseAdmin: any, days: number) {
   const sessMap = new Map(((sessNamesRes.data ?? []) as Row[]).map((p) => [p.id, p.full_name]));
   const provMap = new Map(((provsRes.data ?? []) as Row[]).map((p) => [p.id, p.full_name]));
 
-  const recent = recentRaw.map((r) => ({
-    id: r.id as string,
-    status: r.status as string,
-    created_at: r.created_at as string,
-    medicine: (medMap.get(r.medicine_id) as string) ?? "—",
-    patient:
-      (r.user_id ? (nameMap.get(r.user_id) as string) : (sessMap.get(r.session_id) as string)) ??
-      "Guest",
-    provider: r.provider_id ? ((provMap.get(r.provider_id) as string) ?? "—") : null,
-  }));
+  const recent = recentGroups.map((members) => {
+    const r = leadOf(members);
+    const names = [
+      ...new Set(
+        members
+          .map((member) => medMap.get(member.medicine_id) as string | undefined)
+          .filter(Boolean),
+      ),
+    ];
+    return {
+      id: r.id as string,
+      status: r.status as string,
+      created_at: r.created_at as string,
+      medicine: names.join(", ") || "—",
+      patient:
+        (r.user_id ? (nameMap.get(r.user_id) as string) : (sessMap.get(r.session_id) as string)) ??
+        "Guest",
+      provider: r.provider_id ? ((provMap.get(r.provider_id) as string) ?? "—") : null,
+    };
+  });
 
   // Top medicines by volume in the window
   const volume = new Map<string, number>();

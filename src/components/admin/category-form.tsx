@@ -18,7 +18,9 @@ import {
   type CategoryFormValues,
 } from "@/lib/categories.schema";
 import { StateMultiSelect } from "@/components/admin/state-multi-select";
+import { ConfirmDeleteDialog } from "@/components/admin/confirm-delete-dialog";
 import { FormActionBar } from "@/components/admin/form-action-bar";
+import { RequiredMark } from "@/components/admin/required-mark";
 import { adminLabel } from "@/lib/admin-ui";
 import { Switch } from "../ui/switch";
 
@@ -60,10 +62,27 @@ const cardSectionTitle =
 const pageTitle =
   "text-[24px] font-medium leading-[37px] tracking-[-0.5px] text-[#152A51] sm:text-[28px]";
 
-function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
+function Field({
+  label,
+  error,
+  required,
+  children,
+}: {
+  label: string;
+  error?: string;
+  required?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <div className="min-w-0 space-y-2">
-      <Label className={`${adminLabel} block text-[#152A51]`}>{label}</Label>
+    <div
+      className={`min-w-0 space-y-2 ${
+        error ? "[&_input]:!border-red-500 [&_textarea]:!border-red-500" : ""
+      }`}
+    >
+      <Label className={`${adminLabel} block text-[#152A51]`}>
+        {label}
+        {required ? <RequiredMark /> : null}
+      </Label>
       {children}
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
@@ -105,6 +124,7 @@ export function CategoryForm({
       initialRules.max_age != null ||
       (initialRules.blocked_state_codes?.length ?? 0) > 0);
   const [showEligibility, setShowEligibility] = useState<boolean>(hasInitialRules);
+  const [confirmRemoveImage, setConfirmRemoveImage] = useState(false);
 
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -172,7 +192,7 @@ export function CategoryForm({
 
             {/* Row 1: Name, Slug, Tagline — one line on desktop */}
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-3 lg:gap-6">
-              <Field label="Name" error={errors.name?.message}>
+              <Field label="Name" error={errors.name?.message} required>
                 <Input
                   {...register("name")}
                   placeholder="e.g. Weight Loss"
@@ -180,7 +200,7 @@ export function CategoryForm({
                   className={categoryInput}
                 />
               </Field>
-              <Field label="Slug" error={errors.slug?.message}>
+              <Field label="Slug" error={errors.slug?.message} required>
                 <Input
                   {...register("slug")}
                   placeholder="e.g. weight-loss"
@@ -231,7 +251,7 @@ export function CategoryForm({
                     <Button
                       type="button"
                       variant="ghost"
-                      onClick={() => setValue("image_url", "", { shouldDirty: true })}
+                      onClick={() => setConfirmRemoveImage(true)}
                       disabled={submitting || uploading}
                       className="h-[45px] rounded-[14px] text-destructive hover:bg-red-50"
                     >
@@ -450,6 +470,17 @@ export function CategoryForm({
           primaryClassName="h-[45px] w-full min-w-0 rounded-[14px] border border-[#E3E084]/40 bg-[#E3E084] px-6 text-[14px] font-semibold text-[#152A51] shadow-none hover:bg-[#D6D26A] sm:w-auto sm:min-w-[140px]"
         />
       </form>
+      <ConfirmDeleteDialog
+        open={confirmRemoveImage}
+        title="Remove this image?"
+        description="The category image will be cleared when you save."
+        confirmLabel="Remove"
+        onCancel={() => setConfirmRemoveImage(false)}
+        onConfirm={() => {
+          setValue("image_url", "", { shouldDirty: true });
+          setConfirmRemoveImage(false);
+        }}
+      />
     </div>
   );
 }

@@ -379,6 +379,53 @@ export async function ensureDialogOccupants(params: {
   }
 }
 
+/** Drop users from a group dialog. The occupant can remove themselves; the dialog owner can remove anyone. */
+export async function removeDialogOccupants(params: {
+  dialogId: string;
+  occupantsIds: number[];
+  token?: string;
+}): Promise<boolean> {
+  const ids = params.occupantsIds.filter((id) => Number.isFinite(id) && id > 0);
+  if (!params.dialogId || !ids.length) return false;
+
+  const pull = async (token: string) => {
+    const res = await fetch(`https://api.quickblox.com/chat/Dialog/${params.dialogId}.json`, {
+      method: "PUT",
+      headers: {
+        "QB-Token": token,
+        "Content-Type": "application/json",
+        "QuickBlox-REST-API-Version": "0.1.1",
+      },
+      body: JSON.stringify({
+        pull_all: {
+          occupants_ids: ids,
+        },
+      }),
+    });
+    if (res.ok) return true;
+    const text = await res.text();
+    if (/not found|not present|not an occupant/i.test(text)) return true;
+    console.warn("[consultations] removeDialogOccupants failed:", res.status, text);
+    return false;
+  };
+
+  try {
+    if (params.token) {
+      try {
+        if (await pull(params.token)) return true;
+      } catch (error) {
+        console.warn("[consultations] removeDialogOccupants self-remove failed:", error);
+      }
+    }
+    const owner = await getOwnerProviderAuth();
+    if (params.token && params.token === owner.token) return false;
+    return await pull(owner.token);
+  } catch (error) {
+    console.warn("[consultations] removeDialogOccupants exception:", error);
+    return false;
+  }
+}
+
 export async function sendChatMessageToDialog(params: {
   dialogId: string;
   message: string;

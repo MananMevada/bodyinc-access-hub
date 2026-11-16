@@ -1,6 +1,8 @@
 import { sentenceCase, titleCaseName } from "@/lib/text-normalize";
 import { toastError } from "@/lib/toast-message";
+import { ConfirmDeleteDialog } from "@/components/admin/confirm-delete-dialog";
 import { PageHeader } from "@/components/admin/page-header";
+import { FieldError, RequiredMark } from "@/components/admin/required-mark";
 import { FormActionBar } from "@/components/admin/form-action-bar";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,6 +41,7 @@ import { categoriesQueryOptions } from "@/lib/query-options/categories";
 import {
   adminLabel,
   adminInput,
+  adminInputError,
   adminTextarea,
   adminSelect,
   adminSectionTitle,
@@ -87,6 +90,7 @@ function EditQuestionnairePage() {
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [nameError, setNameError] = useState("");
 
   useEffect(() => {
     const q = dataQ.data?.questionnaire;
@@ -152,12 +156,19 @@ function EditQuestionnairePage() {
         <CardContent className="space-y-5 p-4 pt-0 sm:p-6 sm:pt-0">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label className={adminLabel}>Name</Label>
+              <Label className={adminLabel}>
+                Name
+                <RequiredMark />
+              </Label>
               <Input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                className={adminInput}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (e.target.value.trim()) setNameError("");
+                }}
+                className={`${adminInput} ${nameError ? adminInputError : ""}`}
               />
+              <FieldError message={nameError} />
             </div>
             <div className="flex items-end gap-3">
               <Switch checked={isActive} onCheckedChange={setIsActive} id="q-active" />
@@ -246,7 +257,14 @@ function EditQuestionnairePage() {
       <FormActionBar
         submitting={saveMut.isPending}
         submitLabel="Save details"
-        onSubmit={() => saveMut.mutate()}
+        onSubmit={() => {
+          if (!name.trim()) {
+            setNameError("Please enter a name for this questionnaire.");
+            return;
+          }
+          setNameError("");
+          saveMut.mutate();
+        }}
         onCancel={() => navigate({ to: "/admin/questionnaires" })}
         cancelLabel="Back"
       >
@@ -281,6 +299,10 @@ function QuestionEditor({
       is_disqualifying: o.is_disqualifying,
     })),
   );
+  const [promptError, setPromptError] = useState("");
+  const [optionsError, setOptionsError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [optionToRemove, setOptionToRemove] = useState<number | null>(null);
 
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -322,6 +344,7 @@ function QuestionEditor({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["questionnaire", questionnaireId] });
       toast.success("Question deleted.");
+      setConfirmDelete(false);
     },
     onError: (e: Error) => toast.error(toastError(e)),
   });
@@ -337,19 +360,26 @@ function QuestionEditor({
           size="icon"
           variant="ghost"
           className="h-8 w-8 text-destructive"
-          onClick={() => deleteMut.mutate()}
+          onClick={() => setConfirmDelete(true)}
         >
           <Trash2 className="h-4 w-4" />
         </Button>
       </CardHeader>
       <CardContent className="space-y-5 p-4 pt-0 sm:p-6 sm:pt-0">
         <div className="space-y-2">
-          <Label className={adminLabel}>Prompt</Label>
+          <Label className={adminLabel}>
+            Prompt
+            <RequiredMark />
+          </Label>
           <Input
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            className={adminInput}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              if (e.target.value.trim()) setPromptError("");
+            }}
+            className={`${adminInput} ${promptError ? adminInputError : ""}`}
           />
+          <FieldError message={promptError} />
         </div>
         <div className="space-y-2">
           <Label className={adminLabel}>Helper text (optional)</Label>
@@ -435,12 +465,19 @@ function QuestionEditor({
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0 text-destructive"
-                    onClick={() => setOptions(options.filter((_, idx) => idx !== i))}
+                    onClick={() => {
+                      if (!options[i]?.label.trim()) {
+                        setOptions(options.filter((_, idx) => idx !== i));
+                        return;
+                      }
+                      setOptionToRemove(i);
+                    }}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
               ))}
+              {optionsError ? <FieldError message={optionsError} /> : null}
               <Button
                 variant="outline"
                 size="sm"
@@ -456,7 +493,22 @@ function QuestionEditor({
         <div className="flex gap-2">
           <Button
             size="sm"
-            onClick={() => saveMut.mutate()}
+            onClick={() => {
+              if (!prompt.trim()) {
+                setPromptError("Please enter the question text.");
+                return;
+              }
+              if (
+                (type === "single_choice" || type === "multi_choice") &&
+                !options.some((option) => option.label.trim())
+              ) {
+                setOptionsError("Please add at least one answer option.");
+                return;
+              }
+              setPromptError("");
+              setOptionsError("");
+              saveMut.mutate();
+            }}
             disabled={saveMut.isPending}
             className={adminBtnPrimary}
           >
@@ -464,6 +516,27 @@ function QuestionEditor({
           </Button>
         </div>
       </CardContent>
+      <ConfirmDeleteDialog
+        open={confirmDelete}
+        title="Delete this question?"
+        description="This removes the question and its answer options. Patients will no longer see it."
+        pending={deleteMut.isPending}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => deleteMut.mutate()}
+      />
+      <ConfirmDeleteDialog
+        open={optionToRemove !== null}
+        title="Remove this answer?"
+        description="This answer will be removed when you save the question."
+        confirmLabel="Remove"
+        onCancel={() => setOptionToRemove(null)}
+        onConfirm={() => {
+          if (optionToRemove !== null) {
+            setOptions(options.filter((_, idx) => idx !== optionToRemove));
+          }
+          setOptionToRemove(null);
+        }}
+      />
     </Card>
   );
 }

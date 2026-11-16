@@ -18,7 +18,7 @@ const listInput = z
 
 export const listOrders = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => listInput.parse(input ?? {}))
+  .validator((input: unknown) => listInput.parse(input ?? {}))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -127,7 +127,7 @@ export const listOrders = createServerFn({ method: "POST" })
 
 export const getOrder = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ orderId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ orderId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -240,7 +240,7 @@ const CHANGEABLE_STATUSES = ["active", "trialing", "past_due"];
 // recurring prices on a subscription to share an interval).
 export const changeSubscriptionMedicine = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ orderId: z.string().uuid(), packageId: z.string().uuid() }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -272,12 +272,8 @@ export const changeSubscriptionMedicine = createServerFn({ method: "POST" })
       .maybeSingle();
     if (pkgErr) throw new Error(pkgErr.message);
     if (!pkg) throw new Error("Selected plan not found.");
-    if (!pkg.is_active) throw new Error("Selected plan is inactive.");
-    if (!pkg.stripe_price_id) {
-      throw new Error(
-        "This plan isn't synced to Stripe yet. Open the medicine and save it, then retry.",
-      );
-    }
+    const { planIsSelectable } = await import("@/lib/medicines.functions");
+    await planIsSelectable(supabaseAdmin, pkg);
 
     const { applyPackageChangeToSubscription } = await import("@/lib/subscription-reschedule");
     const { data: oldPkg } = sub.package_id
@@ -288,12 +284,17 @@ export const changeSubscriptionMedicine = createServerFn({ method: "POST" })
           .maybeSingle()
       : { data: null as any };
     const oldPrice = Number((oldPkg as any)?.price ?? 0);
-    const { description } = await applyPackageChangeToSubscription({
+    const { description, billingUpdated } = await applyPackageChangeToSubscription({
       stripe,
       supabaseAdmin,
       sub: { id: sub.id, stripe_subscription_id: sub.stripe_subscription_id },
       pkg: pkg as any,
     });
+    if (!billingUpdated) {
+      throw new Error(
+        "This subscription is not in the current Stripe account, so the bill was not changed.",
+      );
+    }
 
     await supabaseAdmin.from("admin_activity_log").insert({
       admin_user_id: context.userId,

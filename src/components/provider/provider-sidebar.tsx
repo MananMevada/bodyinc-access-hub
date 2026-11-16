@@ -25,10 +25,14 @@ import {
 
 const items = [
   { title: "Dashboard", url: "/provider", exact: true },
+  { title: "Consultations", url: "/provider/consultations", count: "consultations" as const },
   { title: "My Requests", url: "/provider/requests", count: "requests" as const },
   { title: "Unassigned Queue", url: "/provider/queue", count: "queue" as const },
   { title: "Notifications", url: "/provider/notifications", badge: true },
   { title: "My Patients", url: "/provider/patients" },
+  { title: "Availability", url: "/provider/availability" },
+  { title: "Payouts", url: "/provider/payouts" },
+  { title: "Help", url: "/provider/help" },
   { title: "My Profile", url: "/provider/profile" },
 ];
 

@@ -73,7 +73,7 @@ export const listOffers = createServerFn({ method: "POST" })
 
 export const createOffer = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => offerInput.parse(input))
+  .validator((input: unknown) => offerInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -88,7 +88,7 @@ export const createOffer = createServerFn({ method: "POST" })
 
 export const updateOffer = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => offerUpdateInput.parse(input))
+  .validator((input: unknown) => offerUpdateInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -100,7 +100,7 @@ export const updateOffer = createServerFn({ method: "POST" })
 
 export const setOfferActive = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ id: z.string().uuid(), is_active: z.boolean() }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -116,11 +116,26 @@ export const setOfferActive = createServerFn({ method: "POST" })
 
 export const deleteOffer = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.from("portal_offers").delete().eq("id", data.id);
-    if (error) throw new Error(error.message);
+    const { backupThen, fetchMatching, newBackupId } = await import("@/lib/data-backup.server");
+    const db = supabaseAdmin as any;
+    const rows = await fetchMatching(db, "portal_offers", "id", [data.id]);
+    await backupThen(
+      db,
+      {
+        wipeId: newBackupId(),
+        group: "offer",
+        wipedBy: context.userId,
+        label: rows[0]?.headline?.trim() || "Offer",
+        batches: [{ table: "portal_offers", rows }],
+      },
+      async () => {
+        const { error } = await supabaseAdmin.from("portal_offers").delete().eq("id", data.id);
+        if (error) throw new Error(error.message);
+      },
+    );
     return { ok: true };
   });

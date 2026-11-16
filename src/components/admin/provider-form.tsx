@@ -365,7 +365,13 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className={`${fieldShell} space-y-2 text-left`}>
+    <div
+      className={`${fieldShell} space-y-2 text-left ${
+        error
+          ? "[&_button[role=combobox]]:!border-red-500 [&_input]:!border-red-500 [&_textarea]:!border-red-500"
+          : ""
+      }`}
+    >
       <Label className={`${adminLabel} break-words`}>
         {label} {required && <span className="ml-0.5 text-destructive">*</span>}
       </Label>

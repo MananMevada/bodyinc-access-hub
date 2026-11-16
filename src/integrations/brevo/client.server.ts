@@ -23,6 +23,7 @@ export type EmailRecipient = { email: string; name?: string | null };
 
 export type SendTransactionalEmailInput = {
   to: EmailRecipient | EmailRecipient[];
+  cc?: EmailRecipient | EmailRecipient[];
   template?: EmailTemplateKey;
   params?: EmailParams;
   subject?: string;
@@ -165,6 +166,14 @@ export async function sendTransactionalEmail(
     return { ok: false, skipped: true, reason: "no recipient email" };
   }
 
+  const toEmails = new Set(recipients.map((r) => r.email.toLowerCase()));
+  const cc = (Array.isArray(input.cc) ? input.cc : input.cc ? [input.cc] : [])
+    .map((r) => ({
+      email: r.email.trim(),
+      ...(r.name?.trim() ? { name: r.name.trim() } : {}),
+    }))
+    .filter((r) => r.email.length > 0 && !toEmails.has(r.email.toLowerCase()));
+
   const rendered = renderContent(input);
   if ("error" in rendered) {
     console.error(`[brevo] render ${labelOf(input)} failed:`, rendered.error);
@@ -183,6 +192,7 @@ export async function sendTransactionalEmail(
         body: JSON.stringify({
           sender: from,
           to: recipients,
+          ...(cc.length > 0 ? { cc } : {}),
           subject: rendered.subject,
           htmlContent: rendered.html,
           ...(rendered.text ? { textContent: rendered.text } : {}),
@@ -224,6 +234,9 @@ export async function sendTransactionalEmail(
     const info = await (await getTransporter(smtp.user, smtp.pass)).sendMail({
       from: fromHeader,
       to: recipients.map((r) => (r.name ? `"${r.name}" <${r.email}>` : r.email)),
+      ...(cc.length > 0
+        ? { cc: cc.map((r) => (r.name ? `"${r.name}" <${r.email}>` : r.email)) }
+        : {}),
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text || undefined,

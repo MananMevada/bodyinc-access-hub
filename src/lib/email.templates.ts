@@ -3,11 +3,15 @@
  * Rendered locally, then delivered via Brevo (no Brevo dashboard templates required).
  */
 
+import { formatBiId } from "@/lib/format";
+import { emailLogoHtml } from "./email/layout";
+
 export type EmailTemplateKey =
   | "patient_order_confirmed"
   | "patient_approved"
   | "patient_rejected"
   | "patient_additional_payment"
+  | "patient_plan_consent"
   | "patient_medicine_changed"
   | "patient_prescription_ready"
   | "patient_sent_to_pharmacy"
@@ -18,9 +22,16 @@ export type EmailTemplateKey =
   | "patient_consultation_started"
   | "patient_inquiry_update"
   | "patient_provider_assigned"
+  | "patient_onboarding_payment"
+  | "patient_renewal_failed"
+  | "patient_visit_tomorrow"
   | "provider_assigned"
   | "provider_ready_for_review"
+  | "provider_patient_ready"
   | "provider_needs_attention"
+  | "provider_review_waiting"
+  | "provider_plan_change_expired"
+  | "provider_visit_tomorrow"
   | "admin_provider_approved"
   | "admin_new_feedback";
 
@@ -50,12 +61,11 @@ function firstName(params: EmailParams): string {
   return str(params, "FIRSTNAME") || str(params, "FULLNAME").split(/\s+/)[0] || "there";
 }
 
+/** Patient Portal–compatible order label from medication_requests.id (`#BI-XXXX`). */
 function orderShort(params: EmailParams): string {
   const id = str(params, "ORDER_ID");
-  return id ? id.slice(0, 8).toUpperCase() : "";
+  return id ? formatBiId(id) : "";
 }
-
-import { emailLogoHtml } from "./email/layout";
 
 /** Admin UI tokens (`src/lib/admin-ui.ts`) — keep email chrome in lockstep with the portal. */
 const THEME = {
@@ -72,6 +82,16 @@ const THEME = {
   clayBg: "#F8EDE8",
   clayBorder: "#E2C4B8",
 } as const;
+
+const DEFAULT_PATIENT_PORTAL = "https://patient.bodyinc.com";
+
+/** Patient sign-in. A missing portal URL must still leave a button in the mail. */
+function patientLoginUrl(): string {
+  const configured = (process.env.PATIENT_PORTAL_URL || "").trim().replace(/\/$/, "");
+  const base =
+    configured && !/localhost|127\.0\.0\.1/i.test(configured) ? configured : DEFAULT_PATIENT_PORTAL;
+  return `${base}/auth`;
+}
 
 function cta(url: string, label: string): { html: string; text: string } {
   if (!url) return { html: "", text: "" };
@@ -102,7 +122,8 @@ function layout(opts: {
   bodyText: string;
 }): RenderedEmail {
   const brand = "Body Inc";
-  const font = "'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+  const font =
+    "'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
   const heading = opts.hideTitle
     ? ""
     : `<tr>
@@ -168,9 +189,9 @@ const builders: Record<EmailTemplateKey, Builder> = {
       preheader: `Your order for ${med} is confirmed.`,
       title: "Order confirmed",
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p>We've received your payment and created your order${order ? ` <strong>#${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(med)}</strong>.</p>
+        <p>We've received your payment and created your order${order ? ` <strong>${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(med)}</strong>.</p>
         <p>A clinician will review your request shortly.</p>${link.html}`,
-      bodyText: `Hi ${firstName(p)},\n\nWe've received your payment and created your order${order ? ` #${order}` : ""} for ${med}.\nA clinician will review your request shortly.${link.text}`,
+      bodyText: `Hi ${firstName(p)},\n\nWe've received your payment and created your order${order ? ` ${order}` : ""} for ${med}.\nA clinician will review your request shortly.${link.text}`,
     });
   },
 
@@ -207,14 +228,85 @@ const builders: Record<EmailTemplateKey, Builder> = {
   patient_additional_payment: (p) => {
     const med = str(p, "MEDICINE_NAME", "your medication");
     const amount = str(p, "AMOUNT_DUE", "0.00");
-    const link = cta(str(p, "PORTAL_URL"), "Complete payment");
+    const reminder = str(p, "IS_REMINDER") === "1";
+    const finalReminder = str(p, "IS_FINAL") === "1";
+    const heading = finalReminder
+      ? "Last reminder: this change ends tomorrow"
+      : reminder
+        ? "Reminder: pay or decline this change"
+        : "Pay or decline this change";
+    const signIn = cta(patientLoginUrl(), "Sign in to your portal");
+    const followUp = finalReminder
+      ? "This is the last reminder. If you do not pay or decline by tomorrow, the change is cancelled, the previous medicine and plan are restored, and you are not charged. Your provider is notified."
+      : reminder
+        ? "If you do neither before the 7 days are up, the change is cancelled, the previous medicine and plan are restored, and you are not charged. Your provider is notified that the change timed out."
+        : "You have 7 days. We will email you again after 24 hours, and once more the day before those 7 days end, if you have not responded. If you do neither within 7 days, the change is cancelled, the previous medicine and plan are restored, and you are not charged. Your provider is notified that the change timed out.";
+    const where =
+      "Sign in to your patient portal to pay this difference or decline the change. After you sign in, open Dashboard or My Meds. Pay now is on that order. You can decline the change from the same order.";
     return layout({
-      preheader: `Additional payment of $${amount} is required for ${med}.`,
-      title: `Additional payment required — ${med}`,
+      preheader: finalReminder
+        ? `Last reminder: pay $${amount} or decline the change to ${med} by tomorrow.`
+        : reminder
+          ? `Reminder: sign in to pay $${amount} or decline the change to ${med}.`
+          : `Sign in to pay $${amount} or decline the change to ${med}.`,
+      title: heading,
+      subject: `${finalReminder ? "Last reminder: " : reminder ? "Reminder: " : ""}Pay or decline your treatment change — ${med}`,
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p>Your clinician updated your treatment to <strong>${escapeHtml(med)}</strong>. An additional payment of <strong>$${escapeHtml(amount)}</strong> is needed before your prescription can be generated.</p>
-        ${link.html}`,
-      bodyText: `Hi ${firstName(p)},\n\nYour clinician updated your treatment to ${med}. An additional payment of $${amount} is needed before your prescription can be generated.${link.text}`,
+        ${finalReminder ? "<p>This change ends tomorrow.</p>" : reminder ? "<p>This is a reminder. You still have time to respond.</p>" : ""}
+        <p>Your clinician changed your medicine to <strong>${escapeHtml(med)}</strong>. The new medicine costs <strong>$${escapeHtml(amount)}</strong> more.</p>
+        <p>${where}</p>
+        <p>If you pay, the updated order is sent to the pharmacy automatically.</p>
+        <p>If you decline, you are not charged, the pending charge is cancelled, and the order returns to the previous medicine and plan. It goes back under review, and your provider is notified.</p>
+        <p>${followUp}</p>
+        ${signIn.html}`,
+      bodyText: `Hi ${firstName(p)},\n\n${finalReminder ? "This change ends tomorrow.\n\n" : reminder ? "This is a reminder. You still have time to respond.\n\n" : ""}Your clinician changed your medicine to ${med}. The new medicine costs $${amount} more.\n\n${where}\n\nIf you pay, the updated order is sent to the pharmacy automatically.\n\nIf you decline, you are not charged, the pending charge is cancelled, and the order returns to the previous medicine and plan. It goes back under review, and your provider is notified.\n\n${followUp}${signIn.text}`,
+    });
+  },
+
+  patient_plan_consent: (p) => {
+    const med = str(p, "MEDICINE_NAME", "your medication");
+    const credit = str(p, "CREDIT_AMOUNT", "0.00");
+    const reminder = str(p, "IS_REMINDER") === "1";
+    const finalReminder = str(p, "IS_FINAL") === "1";
+    const heading = finalReminder
+      ? "Last reminder: this change ends tomorrow"
+      : reminder
+        ? "Reminder: approve or reject this change"
+        : "Approve or reject this change";
+    const creditHtml =
+      Number(credit) > 0
+        ? `<p>If you approve, a credit of <strong>$${escapeHtml(credit)}</strong> is applied to your next bill.</p>`
+        : "";
+    const creditText =
+      Number(credit) > 0
+        ? `If you approve, a credit of $${credit} is applied to your next bill.\n\n`
+        : "";
+    const signIn = cta(patientLoginUrl(), "Sign in to your portal");
+    const where =
+      "Sign in to your patient portal to approve or reject this change. After you sign in, open Dashboard or My Meds. Approve and Reject are on that order. There is no payment.";
+    const followUp = finalReminder
+      ? "This is the last reminder. If you do not approve or reject by tomorrow, the change is cancelled, the previous medicine and plan are restored, and you are not charged. Your provider is notified."
+      : reminder
+        ? "If you do neither before the 7 days are up, the change is cancelled, the previous medicine and plan are restored, and you are not charged. Your provider is notified that the change timed out."
+        : "You have 7 days. We will email you again after 24 hours, and once more the day before those 7 days end, if you have not responded. If you do neither within 7 days, the change is cancelled, the previous medicine and plan are restored, and you are not charged. Your provider is notified that the change timed out.";
+    return layout({
+      preheader: finalReminder
+        ? `Last reminder: approve or reject the change to ${med} by tomorrow.`
+        : reminder
+          ? `Reminder: approve or reject the change to ${med}.`
+          : `Please approve or reject the change to ${med}.`,
+      title: heading,
+      subject: `${finalReminder ? "Last reminder: " : reminder ? "Reminder: " : ""}Approve or reject your treatment change — ${med}`,
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        ${finalReminder ? "<p>This change ends tomorrow.</p>" : reminder ? "<p>This is a reminder. You still have time to respond.</p>" : ""}
+        <p>Your clinician changed your medicine to <strong>${escapeHtml(med)}</strong>. Nothing extra is due. There is no payment.</p>
+        ${creditHtml}
+        <p>${where}</p>
+        <p>If you approve, the updated order is sent to the pharmacy automatically.</p>
+        <p>If you reject, nothing is charged, no credit is applied, and the order returns to the previous medicine and plan. It goes back under review, and your provider is notified.</p>
+        <p>${followUp}</p>
+        ${signIn.html}`,
+      bodyText: `Hi ${firstName(p)},\n\n${finalReminder ? "This change ends tomorrow.\n\n" : reminder ? "This is a reminder. You still have time to respond.\n\n" : ""}Your clinician changed your medicine to ${med}. Nothing extra is due. There is no payment.\n\n${creditText}${where}\n\nIf you approve, the updated order is sent to the pharmacy automatically.\n\nIf you reject, nothing is charged, no credit is applied, and the order returns to the previous medicine and plan. It goes back under review, and your provider is notified.\n\n${followUp}${signIn.text}`,
     });
   },
 
@@ -250,11 +342,11 @@ const builders: Record<EmailTemplateKey, Builder> = {
   patient_sent_to_pharmacy: (p) => {
     const med = str(p, "MEDICINE_NAME", "your medication");
     return layout({
-      preheader: `Your ${med} order was sent to the pharmacy.`,
-      title: "Sent to pharmacy",
+      preheader: `Your prescription for ${med} was created and sent to the pharmacy.`,
+      title: "Prescription sent to pharmacy",
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p>Your order for <strong>${escapeHtml(med)}</strong> has been sent to the pharmacy for fulfillment.</p>`,
-      bodyText: `Hi ${firstName(p)},\n\nYour order for ${med} has been sent to the pharmacy for fulfillment.`,
+        <p>Your prescription for <strong>${escapeHtml(med)}</strong> has been created and sent to the pharmacy for fulfillment.</p>`,
+      bodyText: `Hi ${firstName(p)},\n\nYour prescription for ${med} has been created and sent to the pharmacy for fulfillment.`,
     });
   },
 
@@ -416,37 +508,64 @@ const builders: Record<EmailTemplateKey, Builder> = {
       preheader: `A practitioner has been assigned to your ${med} request and is ready to consult.`,
       title: "Practitioner assigned — prescription under review",
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p>A licensed practitioner has been assigned to your <strong>${escapeHtml(med)}</strong> request${order ? ` (order <strong>#${escapeHtml(order)}</strong>)` : ""} and is ready to consult. Your prescription is now under review.</p>
+        <p>A licensed practitioner has been assigned to your <strong>${escapeHtml(med)}</strong> request${order ? ` (order <strong>${escapeHtml(order)}</strong>)` : ""} and is ready to consult. Your prescription is now under review.</p>
         ${link.html}`,
-      bodyText: `Hi ${firstName(p)},\n\nA licensed practitioner has been assigned to your ${med} request${order ? ` (order #${order})` : ""} and is ready to consult. Your prescription is now under review.${link.text}`,
+      bodyText: `Hi ${firstName(p)},\n\nA licensed practitioner has been assigned to your ${med} request${order ? ` (order ${order})` : ""} and is ready to consult. Your prescription is now under review.${link.text}`,
     });
   },
 
   provider_assigned: (p) => {
     const med = str(p, "MEDICINE_NAME", "a treatment");
     const order = orderShort(p);
-    const link = cta(str(p, "REQUEST_URL"), "Open order");
+    const patient = str(p, "PATIENT_NAME", "A patient");
+    const link = cta(str(p, "REQUEST_URL"), "Open My Requests");
     return layout({
-      preheader: `New order assigned for ${med}.`,
-      title: "New order assigned",
+      preheader: `${patient} was assigned to you.`,
+      title: "A patient was assigned to you",
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p>An order${order ? ` <strong>#${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(med)}</strong> has been assigned to you.</p>
+        <p><strong>${escapeHtml(patient)}</strong> was assigned to you.</p>
+        <p>Medicine: <strong>${escapeHtml(med)}</strong>${order ? `. Order <strong>${escapeHtml(order)}</strong>` : ""}.</p>
+        <p>This patient is in My Requests. Open that list to review them.</p>
         ${link.html}`,
-      bodyText: `Hi ${firstName(p)},\n\nAn order${order ? ` #${order}` : ""} for ${med} has been assigned to you.${link.text}`,
+      bodyText: `Hi ${firstName(p)},\n\n${patient} was assigned to you.\nMedicine: ${med}${order ? `. Order ${order}` : ""}.\nThis patient is in My Requests. Open that list to review them.${link.text}`,
     });
   },
 
   provider_ready_for_review: (p) => {
     const med = str(p, "MEDICINE_NAME", "a treatment");
     const order = orderShort(p);
-    const link = cta(str(p, "REQUEST_URL"), "Review order");
+    const patient = str(p, "PATIENT_NAME", "A patient");
+    const link = cta(str(p, "REQUEST_URL"), "Open My Requests");
     return layout({
-      preheader: `Order for ${med} is ready for clinical review.`,
-      title: "Ready for clinical review",
+      preheader: `${patient} is assigned to you and ready for review.`,
+      title: "A patient is ready for your review",
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p>Order${order ? ` <strong>#${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(med)}</strong> is ready for your review.</p>
+        <p><strong>${escapeHtml(patient)}</strong> is assigned to you and is ready for your review.</p>
+        <p>Medicine: <strong>${escapeHtml(med)}</strong>${order ? `. Order <strong>${escapeHtml(order)}</strong>` : ""}.</p>
+        <p>This patient is in My Requests. Review the intake form there, and join the consultation if this order needs one.</p>
         ${link.html}`,
-      bodyText: `Hi ${firstName(p)},\n\nOrder${order ? ` #${order}` : ""} for ${med} is ready for your review.${link.text}`,
+      bodyText: `Hi ${firstName(p)},\n\n${patient} is assigned to you and is ready for your review.\nMedicine: ${med}${order ? `. Order ${order}` : ""}.\nThis patient is in My Requests. Review the intake form there, and join the consultation if this order needs one.${link.text}`,
+    });
+  },
+
+  provider_patient_ready: (p) => {
+    const med = str(p, "MEDICINE_NAME", "a treatment");
+    const order = orderShort(p);
+    const patient = str(p, "PATIENT_NAME", "A patient");
+    const fromShop = str(p, "ORDER_SOURCE") === "shop";
+    const arrived = fromShop
+      ? "placed a shop order and is waiting for a provider."
+      : "finished signup and is waiting for a provider.";
+    const link = cta(str(p, "REQUEST_URL"), "Open this order");
+    return layout({
+      preheader: `${patient} is ready to be claimed.`,
+      title: fromShop ? "A shop order is ready to claim" : "A new patient is ready to claim",
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        <p><strong>${escapeHtml(patient)}</strong> ${arrived}</p>
+        <p>Medicine: <strong>${escapeHtml(med)}</strong>${order ? `. Order <strong>${escapeHtml(order)}</strong>` : ""}.</p>
+        <p>If you are licensed in this patient's state, open this order in the Unassigned queue and claim this patient. The first provider to claim it is assigned.</p>
+        ${link.html}`,
+      bodyText: `Hi ${firstName(p)},\n\n${patient} ${arrived}\nMedicine: ${med}${order ? `. Order ${order}` : ""}.\nIf you are licensed in this patient's state, open this order in the Unassigned queue and claim this patient. The first provider to claim it is assigned.${link.text}`,
     });
   },
 
@@ -455,12 +574,112 @@ const builders: Record<EmailTemplateKey, Builder> = {
     const order = orderShort(p);
     const link = cta(str(p, "REQUEST_URL"), "Open order");
     return layout({
-      preheader: `Order for ${med} needs the patient's confirmation.`,
+      preheader: `Order for ${med} is waiting on an additional payment.`,
       title: "Order needs attention",
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p>Order${order ? ` <strong>#${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(med)}</strong> needs the patient to confirm a plan change.</p>
+        <p>Order${order ? ` <strong>${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(med)}</strong> is waiting on the patient's additional payment. It is sent to the pharmacy after that payment succeeds.</p>
         ${link.html}`,
-      bodyText: `Hi ${firstName(p)},\n\nOrder${order ? ` #${order}` : ""} for ${med} needs the patient to confirm a plan change.${link.text}`,
+      bodyText: `Hi ${firstName(p)},\n\nOrder${order ? ` ${order}` : ""} for ${med} is waiting on the patient's additional payment. It is sent to the pharmacy after that payment succeeds.${link.text}`,
+    });
+  },
+
+  patient_onboarding_payment: (p) => {
+    const later = str(p, "IS_LATER") === "1";
+    const link = cta(patientLoginUrl(), "Finish signup");
+    const heading = later ? "Your signup is still waiting on payment" : "Finish your signup";
+    return layout({
+      preheader: later
+        ? "Your Body Inc signup is still waiting on payment."
+        : "Your Body Inc signup is waiting on payment.",
+      title: heading,
+      subject: later ? "Your signup is still waiting on payment" : "Finish your Body Inc signup",
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        <p>${later ? "You started signup a few days ago, and payment is still pending." : "You started signup, and payment is still pending."}</p>
+        <p>Finish payment to continue. If you have already paid, you can ignore this email.</p>
+        ${link.html}`,
+      bodyText: `Hi ${firstName(p)},\n\n${later ? "You started signup a few days ago, and payment is still pending." : "You started signup, and payment is still pending."}\n\nFinish payment to continue. If you have already paid, you can ignore this email.${link.text}`,
+    });
+  },
+
+  patient_renewal_failed: (p) => {
+    const med = str(p, "MEDICINE_NAME", "your medication");
+    const link = cta(patientLoginUrl(), "Update your card");
+    return layout({
+      preheader: `The renewal payment for ${med} did not go through.`,
+      title: "Your renewal payment did not go through",
+      subject: `Your renewal payment did not go through — ${med}`,
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        <p>We tried to renew <strong>${escapeHtml(med)}</strong>, and the card on file was declined. Your subscription is past due.</p>
+        <p>Update your card in the patient portal so the renewal can go through. Your plan does not renew until that payment succeeds.</p>
+        ${link.html}`,
+      bodyText: `Hi ${firstName(p)},\n\nWe tried to renew ${med}, and the card on file was declined. Your subscription is past due.\n\nUpdate your card in the patient portal so the renewal can go through. Your plan does not renew until that payment succeeds.${link.text}`,
+    });
+  },
+
+  patient_visit_tomorrow: (p) => {
+    const when = str(p, "VISIT_TIME", "tomorrow");
+    const med = str(p, "MEDICINE_NAME", "your treatment");
+    const link = cta(patientLoginUrl(), "Open your portal");
+    return layout({
+      preheader: `Your visit is tomorrow, ${when}.`,
+      title: "Your visit is tomorrow",
+      subject: "Your visit is tomorrow",
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        <p>This is a reminder that your visit for <strong>${escapeHtml(med)}</strong> is tomorrow, <strong>${escapeHtml(when)}</strong>.</p>
+        <p>Sign in to the patient portal at that time to join.</p>
+        ${link.html}`,
+      bodyText: `Hi ${firstName(p)},\n\nThis is a reminder that your visit for ${med} is tomorrow, ${when}.\n\nSign in to the patient portal at that time to join.${link.text}`,
+    });
+  },
+
+  provider_review_waiting: (p) => {
+    const patient = str(p, "PATIENT_NAME", "A patient");
+    const med = str(p, "MEDICINE_NAME", "a treatment");
+    const order = orderShort(p);
+    const link = cta(str(p, "REQUEST_URL"), "Open this case");
+    return layout({
+      preheader: `${patient} has been waiting about a day and the case is still unopened.`,
+      title: "A patient is still waiting for review",
+      subject: `${patient} is still waiting for review`,
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        <p><strong>${escapeHtml(patient)}</strong> has been waiting in review for about a day, and this case is still unopened.</p>
+        <p>Medicine: <strong>${escapeHtml(med)}</strong>${order ? `. Order <strong>${escapeHtml(order)}</strong>` : ""}.</p>
+        ${link.html}`,
+      bodyText: `Hi ${firstName(p)},\n\n${patient} has been waiting in review for about a day, and this case is still unopened.\nMedicine: ${med}${order ? `. Order ${order}` : ""}.${link.text}`,
+    });
+  },
+
+  provider_plan_change_expired: (p) => {
+    const patient = str(p, "PATIENT_NAME", "A patient");
+    const med = str(p, "MEDICINE_NAME", "the previous medicine");
+    const order = orderShort(p);
+    const link = cta(str(p, "REQUEST_URL"), "Open this order");
+    return layout({
+      preheader: `${patient} did not answer the medicine change. The order is back under review.`,
+      title: "A medicine change expired",
+      subject: `Medicine change expired — ${patient}`,
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        <p><strong>${escapeHtml(patient)}</strong> did not respond within 7 days. The medicine change expired, the previous medicine and plan were restored, and the patient was not charged.</p>
+        <p>The order${order ? ` <strong>${escapeHtml(order)}</strong>` : ""} is back under review for <strong>${escapeHtml(med)}</strong>.</p>
+        ${link.html}`,
+      bodyText: `Hi ${firstName(p)},\n\n${patient} did not respond within 7 days. The medicine change expired, the previous medicine and plan were restored, and the patient was not charged.\n\nThe order${order ? ` ${order}` : ""} is back under review for ${med}.${link.text}`,
+    });
+  },
+
+  provider_visit_tomorrow: (p) => {
+    const patient = str(p, "PATIENT_NAME", "A patient");
+    const when = str(p, "VISIT_TIME", "tomorrow");
+    const med = str(p, "MEDICINE_NAME", "a treatment");
+    const link = cta(str(p, "REQUEST_URL"), "Open this visit");
+    return layout({
+      preheader: `You have a visit with ${patient} tomorrow.`,
+      title: "You have a visit tomorrow",
+      subject: `Visit tomorrow with ${patient}`,
+      bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
+        <p>You have a scheduled visit with <strong>${escapeHtml(patient)}</strong> tomorrow, <strong>${escapeHtml(when)}</strong>.</p>
+        <p>Medicine: <strong>${escapeHtml(med)}</strong>.</p>
+        ${link.html}`,
+      bodyText: `Hi ${firstName(p)},\n\nYou have a scheduled visit with ${patient} tomorrow, ${when}.\nMedicine: ${med}.${link.text}`,
     });
   },
 
@@ -474,10 +693,10 @@ const builders: Record<EmailTemplateKey, Builder> = {
       preheader: `${provider} approved ${med} — ready to send to pharmacy.`,
       title: "Provider approved an order",
       bodyHtml: `<p>Hi ${escapeHtml(firstName(p))},</p>
-        <p><strong>${escapeHtml(provider)}</strong> approved order${order ? ` <strong>#${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(patient)}</strong> — <strong>${escapeHtml(med)}</strong>.</p>
+        <p><strong>${escapeHtml(provider)}</strong> approved order${order ? ` <strong>${escapeHtml(order)}</strong>` : ""} for <strong>${escapeHtml(patient)}</strong> — <strong>${escapeHtml(med)}</strong>.</p>
         <p>You can now send this order to the pharmacy (LifeFile).</p>
         ${link.html}`,
-      bodyText: `Hi ${firstName(p)},\n\n${provider} approved order${order ? ` #${order}` : ""} for ${patient} — ${med}.\nYou can now send this order to the pharmacy (LifeFile).${link.text}`,
+      bodyText: `Hi ${firstName(p)},\n\n${provider} approved order${order ? ` ${order}` : ""} for ${patient} — ${med}.\nYou can now send this order to the pharmacy (LifeFile).${link.text}`,
     });
   },
 
@@ -488,7 +707,9 @@ const builders: Record<EmailTemplateKey, Builder> = {
     const message = str(p, "MESSAGE");
     const who = email ? `${patient} (${email})` : patient;
     const link = cta(str(p, "FEEDBACK_URL"), "Open feedback");
-    const messageHtml = message ? noteBox(`<strong>Message:</strong><br/>${escapeHtml(message)}`) : "";
+    const messageHtml = message
+      ? noteBox(`<strong>Message:</strong><br/>${escapeHtml(message)}`)
+      : "";
     return layout({
       preheader: `${patient} sent new ${category} feedback.`,
       title: "New patient feedback",

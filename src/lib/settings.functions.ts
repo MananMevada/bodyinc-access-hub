@@ -12,6 +12,8 @@ export type PlatformSettings = {
   referral_enabled: boolean;
   maintenance_mode: boolean;
   new_signups_enabled: boolean;
+  /** Sent to LifeFile on every order. The patient's own phone is never sent. */
+  lifefile_contact_phone: string;
 };
 
 const DEFAULTS: PlatformSettings = {
@@ -23,7 +25,32 @@ const DEFAULTS: PlatformSettings = {
   referral_enabled: true,
   maintenance_mode: false,
   new_signups_enabled: true,
+  lifefile_contact_phone: "",
 };
+
+export function normalizeLifeFileContactPhone(value: string): string {
+  const phone = value.trim();
+  if (!phone) return "";
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 10 || digits.length > 15) {
+    throw new Error("Enter a pharmacy contact phone with at least 10 digits.");
+  }
+  return phone;
+}
+
+/** Clinic number for LifeFile. Empty until an admin saves one. */
+export async function readLifeFileContactPhone(supabaseAdmin: {
+  from: (table: string) => any;
+}): Promise<string> {
+  const { data, error } = await supabaseAdmin
+    .from("platform_settings")
+    .select("value")
+    .eq("key", "lifefile_contact_phone")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const raw = (data as { value?: unknown } | null)?.value;
+  return typeof raw === "string" ? raw.trim() : "";
+}
 
 const settingsSchema = z.object({
   consultation_fee_cents: z.number().int().min(0).max(1_000_000),
@@ -34,6 +61,15 @@ const settingsSchema = z.object({
   referral_enabled: z.boolean(),
   maintenance_mode: z.boolean(),
   new_signups_enabled: z.boolean(),
+  lifefile_contact_phone: z
+    .string()
+    .trim()
+    .max(40)
+    .refine((value) => {
+      if (!value) return true;
+      const digits = value.replace(/\D/g, "");
+      return digits.length >= 10 && digits.length <= 15;
+    }, "Enter a pharmacy contact phone with at least 10 digits."),
 });
 
 export const getSettings = createServerFn({ method: "GET" })
@@ -56,7 +92,7 @@ export const getSettings = createServerFn({ method: "GET" })
 
 export const updateSettings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => settingsSchema.partial().parse(input))
+  .validator((input: unknown) => settingsSchema.partial().parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

@@ -26,17 +26,26 @@ export const REQUEST_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-export function requestStatusLabel(status: string): string {
+export function requestStatusLabel(status: string, deltaCents?: number | null): string {
+  if (status === "awaiting_additional_payment" && deltaCents != null && deltaCents <= 0) {
+    return "Under review";
+  }
   return REQUEST_STATUS_LABELS[status] ?? status;
 }
 
 /** Practitioner-facing labels: no payment / price / refund wording. */
 const CLINICAL_STATUS_LABELS: Record<string, string> = {
   payment_completed: "New order",
-  awaiting_additional_payment: "Waiting on patient",
+  awaiting_additional_payment: "Additional payment",
+  consultation_no_show: "Patient no-show",
+  consultation_dropped: "Call dropped",
+  consultation_reschedule: "Reschedule requested",
 };
 
-export function clinicalStatusLabel(status: string): string {
+export function clinicalStatusLabel(status: string, deltaCents?: number | null): string {
+  if (status === "awaiting_additional_payment" && arguments.length > 1) {
+    return requestStatusLabel(status, deltaCents);
+  }
   return CLINICAL_STATUS_LABELS[status] ?? requestStatusLabel(status);
 }
 
@@ -46,7 +55,7 @@ export function clinicalEventNote(note: string | null | undefined): string | nul
   const cleaned = note
     .replace(/;\s*additional\s+\$[\d,.]+ due\.?/gi, ".")
     .replace(/;\s*\$[\d,.]+ credited next cycle\.?/gi, ".")
-    .replace(/Additional payment received\.?/gi, "Patient confirmed the plan change.")
+    .replace(/Additional payment received\.?/gi, "The updated order continued.")
     .replace(/\$[\d,.]+/g, "")
     .replace(/price difference[^.]*\.?/gi, "")
     .replace(/\s+/g, " ")

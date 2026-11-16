@@ -13,7 +13,6 @@ export type LifeFileOrderInput = {
     dob: string | null;
     sex: string | null;
     email: string | null;
-    phone: string | null;
     streetAddress: string | null;
     apartment: string | null;
     city: string | null;
@@ -34,7 +33,11 @@ export type LifeFileOrderInput = {
     medicineName: string;
     directions: string | null;
     lfProductID: number;
+    /** Plan length in months. 1-month sends 1, 2-month sends 2, 3-month sends 3. */
+    quantity: number;
   };
+  /** Admin-entered clinic number. Sent for every patient. */
+  contactPhone: string;
   config: LifeFileConfig;
 };
 
@@ -54,6 +57,20 @@ function splitName(fullName: string) {
   };
 }
 
+/**
+ * One Life File message id for the life of this order. A retry, a second payment
+ * confirmation, or a restart after a crash must send this same id. A new id is a
+ * new prescription, which is how 110320739 and 110320740 were both created.
+ */
+export function lifeFileMessageId(requestId: string): number {
+  const hex = requestId.replace(/-/g, "").slice(0, 12);
+  const parsed = Number.parseInt(hex, 16);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error("Life File message id could not be derived from this order.");
+  }
+  return parsed;
+}
+
 function mapGender(sex: string | null): "m" | "f" | "u" {
   if (sex === "male") return "m";
   if (sex === "female") return "f";
@@ -68,6 +85,7 @@ export function extractLifeFileOrderId(response: LifeFileResponse | null | undef
   const nested =
     responseData?.orderId ??
     responseData?.orderID ??
+    responseData?.lfOrderId ??
     responseData?.id ??
     responseData?.order?.id ??
     null;
@@ -83,13 +101,30 @@ export async function createLifeFileOrder(input: LifeFileOrderInput) {
     throw new Error("Provider NPI is required for Life File.");
   }
 
+  const contactPhone = input.contactPhone.trim();
+  if (!contactPhone) {
+    throw new Error(
+      "Set the pharmacy contact phone in Admin → Settings before sending to the pharmacy.",
+    );
+  }
+
   const patientName = splitName(input.patient.fullName);
   const providerName = splitName(input.provider.fullName);
+  const nameParts = input.provider.fullName.trim().split(/\s+/).filter(Boolean);
+  if (nameParts.length < 2 || !providerName.firstName || !providerName.lastName) {
+    throw new Error(
+      "LifeFile needs the doctor's first and last name. Enter both on the provider profile.",
+    );
+  }
   const product = input.prescription;
+  const quantity = Math.round(Number(product.quantity));
+  if (!Number.isFinite(quantity) || quantity < 1) {
+    throw new Error("Pharmacy quantity must be the plan length: 1, 2, or 3 months.");
+  }
 
   const payload = {
     message: {
-      id: Date.now(),
+      id: lifeFileMessageId(input.requestId),
       sentTime: new Date().toISOString(),
     },
 
@@ -107,9 +142,6 @@ export async function createLifeFileOrder(input: LifeFileOrderInput) {
         lastName: providerName.lastName,
         firstName: providerName.firstName,
         email: input.provider.email ?? undefined,
-        ...(input.provider.lifeFileProviderId
-          ? { id: input.provider.lifeFileProviderId }
-          : {}),
       },
 
       practice: {
@@ -127,16 +159,14 @@ export async function createLifeFileOrder(input: LifeFileOrderInput) {
         state: input.patient.stateCode ?? undefined,
         zip: input.patient.postalCode ?? undefined,
         country: input.patient.country ?? undefined,
-        phoneHome: input.patient.phone ?? undefined,
-        email: input.patient.email ?? undefined,
+        phoneHome: contactPhone,
       },
 
       shipping: {
         recipientType: "patient",
         recipientLastName: patientName.lastName,
         recipientFirstName: patientName.firstName,
-        recipientPhone: input.patient.phone ?? undefined,
-        recipientEmail: input.patient.email ?? undefined,
+        recipientPhone: contactPhone,
         addressLine1: input.patient.streetAddress ?? undefined,
         addressLine2: input.patient.apartment ?? undefined,
         city: input.patient.city ?? undefined,
@@ -146,13 +176,20 @@ export async function createLifeFileOrder(input: LifeFileOrderInput) {
         service: 9,
       },
 
+      // Patient pays Body Inc, and Body Inc pays the pharmacy.
+      billing: {
+        payorType: "doc",
+      },
+
       rxs: [
         {
           rxType: "new",
           drugName: product.medicineName,
           lfProductID: product.lfProductID,
+          quantity,
           directions: product.directions?.trim() || undefined,
-          uuid: crypto.randomUUID(),
+          foreignRxNumber: input.requestId,
+          uuid: input.requestId,
         },
       ],
     },
@@ -162,7 +199,10 @@ export async function createLifeFileOrder(input: LifeFileOrderInput) {
     requestId: input.requestId,
     medicine: product.medicineName,
     lfProductID: product.lfProductID,
+    quantity,
     practiceId: input.config.practiceId,
+    username: input.config.apiUsername,
+    payorType: "doc",
   });
 
   const response = await lifeFileRequest<LifeFileResponse>("/order", {

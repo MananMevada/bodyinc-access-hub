@@ -26,17 +26,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { medicinesQueryOptions } from "@/lib/query-options/medicines";
+import { listMedicinesForChange } from "@/lib/medicines.functions";
 import { categoriesQueryOptions } from "@/lib/query-options/categories";
 import { changeRequestMedicine } from "@/lib/requests.functions";
 import type { StoredMedicinePackage } from "@/lib/medicines.store";
 import { formatDollars } from "@/lib/format";
 
-function planLabel(p: StoredMedicinePackage, hideFinancial = false) {
+function planLabel(p: StoredMedicinePackage) {
   const dur = p.duration_months === 1 ? "Monthly" : `${p.duration_months}-Month`;
-  if (hideFinancial) {
-    return p.duration_months > 1 ? `${dur} (every ${p.duration_months} mo)` : dur;
-  }
   return `${dur} — ${formatDollars(p.price)}${p.duration_months > 1 ? ` (every ${p.duration_months} mo)` : "/mo"}`;
 }
 
@@ -46,9 +43,9 @@ export type RequestChangeCurrent = {
   price: number | null;
 };
 
-// Change the medicine on a medication order under review. Unlike the subscription change dialog,
-// a more expensive switch sends the patient a payment request for the difference before the
-// prescription is generated; a cheaper switch is credited to their next cycle.
+// Change the medicine on a medication order under review. A higher price waits for the
+// difference payment, then the prescription is sent to the pharmacy. The same or a lower
+// price is sent immediately, and a lower price is credited on the next bill.
 export function RequestChangeMedicineDialog({
   requestId,
   open,
@@ -70,7 +67,12 @@ export function RequestChangeMedicineDialog({
   currentPackageId?: string | null;
   hideFinancial?: boolean;
 }) {
-  const medicinesQ = useQuery(medicinesQueryOptions());
+  const loadMedicines = useServerFn(listMedicinesForChange);
+  const medicinesQ = useQuery({
+    queryKey: ["medicines-for-change", currentMedicineId ?? null],
+    queryFn: () => loadMedicines({ data: { currentMedicineId: currentMedicineId ?? undefined } }),
+    enabled: open,
+  });
   const categoriesQ = useQuery(categoriesQueryOptions());
   const change = useServerFn(changeRequestMedicine);
 
@@ -95,8 +97,11 @@ export function RequestChangeMedicineDialog({
   }, [open, currentMedicineId, currentVariantId, currentPackageId]);
 
   const medicines = useMemo(
-    () => (medicinesQ.data ?? []).filter((m) => m.is_active),
-    [medicinesQ.data],
+    () =>
+      (medicinesQ.data ?? []).filter(
+        (m) => m.is_active || m.show_to_providers || m.id === currentMedicineId,
+      ),
+    [medicinesQ.data, currentMedicineId],
   );
 
   // Same-category first: practitioners switch within a treatment category by default, and must
@@ -128,23 +133,27 @@ export function RequestChangeMedicineDialog({
   }, [medicines, search, allowOtherCategory, currentCategoryIds, currentMedicineId]);
 
   const medicine = medicines.find((m) => m.id === medicineId) ?? null;
+  const hiddenFromPatients = Boolean(medicine && !medicine.is_active);
   const hasVariants = (medicine?.variants.length ?? 0) > 0;
   const activeVariants = useMemo(() => {
-    const list = (medicine?.variants ?? []).filter((v) => v.is_active);
+    const list = (medicine?.variants ?? []).filter((v) => v.is_active || hiddenFromPatients);
     // A since-deactivated variant must still be listed while it is the order's current one,
     // otherwise its plans are unreachable and the dialog looks empty.
     if (medicine && medicine.id === currentMedicineId && currentVariantId) {
       const cur = medicine.variants.find((v) => v.id === currentVariantId);
-      if (cur && !cur.is_active) return [cur, ...list];
+      if (cur && !list.some((v) => v.id === cur.id)) return [cur, ...list];
     }
     return list;
-  }, [medicine, currentMedicineId, currentVariantId]);
+  }, [medicine, currentMedicineId, currentVariantId, hiddenFromPatients]);
   const variant = hasVariants ? (activeVariants.find((v) => v.id === variantId) ?? null) : null;
 
+  const rawPlans = hasVariants ? (variant?.packages ?? []) : (medicine?.packages ?? []);
   const packages = useMemo(() => {
-    const list = hasVariants ? (variant?.packages ?? []) : (medicine?.packages ?? []);
-    return list.filter((p) => (p.is_active && p.stripe_price_id) || p.id === currentPackageId);
-  }, [hasVariants, variant, medicine, currentPackageId]);
+    return rawPlans.filter(
+      (p) =>
+        (p.stripe_price_id && (p.is_active || hiddenFromPatients)) || p.id === currentPackageId,
+    );
+  }, [rawPlans, hiddenFromPatients, currentPackageId]);
 
   useEffect(() => {
     if (!medicine) return;
@@ -166,10 +175,25 @@ export function RequestChangeMedicineDialog({
   }
 
   const selectedPkg = packages.find((p) => p.id === packageId) ?? null;
-  const diff = selectedPkg && current.price != null ? selectedPkg.price - current.price : null;
+  const currentPlanPrice = useMemo(() => {
+    if (current.price != null) return current.price;
+    if (!currentPackageId) return null;
+    for (const item of medicines) {
+      const direct = item.packages.find((p) => p.id === currentPackageId);
+      if (direct) return direct.price;
+      for (const itemVariant of item.variants) {
+        const match = itemVariant.packages.find((p) => p.id === currentPackageId);
+        if (match) return match.price;
+      }
+    }
+    return null;
+  }, [current.price, currentPackageId, medicines]);
+  const diff =
+    selectedPkg && currentPlanPrice != null ? selectedPkg.price - currentPlanPrice : null;
 
   const isCrossCategory = !!medicine && currentCategoryIds.size > 0 && !inSameCategory(medicine);
-  const reasonMissing = isCrossCategory && categoryReason.trim().length < 10;
+  const reasonMissing =
+    (hideFinancial || isCrossCategory) && categoryReason.trim().length < 10;
   const isUnchanged = !!selectedPkg && !!currentPackageId && selectedPkg.id === currentPackageId;
 
   const currentVariantName = useMemo(() => {
@@ -184,16 +208,21 @@ export function RequestChangeMedicineDialog({
         data: {
           requestId,
           packageId,
+          note: hideFinancial ? sentenceCase(categoryReason) : undefined,
           crossCategoryReason: isCrossCategory ? sentenceCase(categoryReason) : undefined,
         },
       }),
     onSuccess: (res: any) => {
       toastActionWithEmail(
         res?.status === "awaiting_additional_payment"
-          ? hideFinancial
-            ? "Order updated. The patient needs to confirm the new plan before prescribing."
-            : "Order updated. Additional payment is required for the difference."
-          : "Order updated and approved.",
+          ? Number(res?.delta_cents) > 0
+            ? "Order updated. The patient was asked to pay the difference. The prescription is sent to the pharmacy after they pay."
+            : "Order updated. The patient was asked to approve or reject this change. It is sent to the pharmacy only after they approve."
+          : res?.pharmacy_error
+            ? "Order updated. The pharmacy send did not go through, so it stays at Prescription approved."
+            : res?.status === "sent_to_pharmacy"
+              ? "Order updated. The prescription was sent to the pharmacy."
+              : "Order updated and approved.",
         res?.email_sent,
       );
       onChanged();
@@ -206,13 +235,13 @@ export function RequestChangeMedicineDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Change medicine</DialogTitle>
           <DialogDescription>
             {hideFinancial
-              ? "Switch this order to a different medicine, or keep the same medicine and change its variant/dose or plan. The patient may need to confirm before the prescription can be generated."
-              : "Switch this order to a different medicine, or keep the same medicine and change its variant/dose or plan. If it costs more, the patient is sent a payment request for the difference before the prescription is generated; if it costs less, the difference is credited to their next cycle."}
+              ? "Switch this order to a different medicine, or keep the same medicine and change its variant or plan. A higher price waits for the patient to pay or decline. The same or a lower price waits for the patient to approve or reject. The pharmacy send happens only after they pay or approve."
+              : "Switch this order to a different medicine, or keep the same medicine and change its variant or plan. A higher price is sent to the pharmacy after the patient pays the difference. The same or a lower price is sent now, and a lower price is credited on the next bill."}
           </DialogDescription>
         </DialogHeader>
 
@@ -227,11 +256,9 @@ export function RequestChangeMedicineDialog({
                 <div className="text-muted-foreground">{currentVariantName}</div>
               ) : null}
               <div className="text-muted-foreground">{current.planName ?? "—"}</div>
-              {hideFinancial ? null : (
-                <div className="text-lg font-bold text-foreground">
-                  {current.price != null ? formatDollars(current.price) : "—"}
-                </div>
-              )}
+              <div className="text-lg font-bold text-foreground">
+                {currentPlanPrice != null ? formatDollars(currentPlanPrice) : "—"}
+              </div>
               {categoryNames.length > 0 ? (
                 <div className="flex flex-wrap gap-1 pt-1">
                   {categoryNames.map((n) => (
@@ -305,6 +332,11 @@ export function RequestChangeMedicineDialog({
                               Current
                             </Badge>
                           ) : null}
+                          {!m.is_active ? (
+                            <Badge variant="secondary" className="text-[10px]">
+                              Hidden from patients
+                            </Badge>
+                          ) : null}
                         </div>
                         {other ? (
                           <div className="text-[11px] text-muted-foreground">Other category</div>
@@ -317,17 +349,23 @@ export function RequestChangeMedicineDialog({
               )}
             </div>
 
-            {isCrossCategory ? (
+            {hideFinancial || isCrossCategory ? (
               <div className="space-y-1 rounded-md border border-[#B8684B]/40 bg-[#B8684B]/5 p-3">
                 <Label className="text-xs font-semibold text-[#8F4A33]">
-                  Clinical reason for changing treatment category
+                  {isCrossCategory
+                    ? "Clinical reason for changing treatment category"
+                    : "Clinical reason for this change"}
                 </Label>
                 <Textarea
                   value={categoryReason}
                   onChange={(e) => setCategoryReason(e.target.value)}
                   rows={3}
                   maxLength={500}
-                  placeholder="Explain why this patient should move to a different treatment category…"
+                  placeholder={
+                    isCrossCategory
+                      ? "Explain why this patient should move to a different treatment category…"
+                      : "Why is this medicine or plan changing?"
+                  }
                 />
                 <p className="text-[11px] text-muted-foreground">
                   Required (min. 10 characters). This is recorded on the order timeline and notes.
@@ -353,6 +391,7 @@ export function RequestChangeMedicineDialog({
                       <SelectItem key={v.id} value={v.id}>
                         {v.name}
                         {v.id === currentVariantId ? " (current)" : ""}
+                        {!v.is_active ? " (hidden from patients)" : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -365,7 +404,9 @@ export function RequestChangeMedicineDialog({
                 <Label className="text-xs">Plan</Label>
                 {packages.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
-                    No purchasable plan for this selection.
+                    {rawPlans.some((p) => !p.stripe_price_id)
+                      ? "This plan is not synced to Stripe yet. Open the medicine, save it, and try again."
+                      : "No purchasable plan for this selection."}
                   </p>
                 ) : (
                   <Select value={packageId} onValueChange={setPackageId}>
@@ -375,8 +416,9 @@ export function RequestChangeMedicineDialog({
                     <SelectContent>
                       {packages.map((p) => (
                         <SelectItem key={p.id} value={p.id}>
-                          {planLabel(p, hideFinancial)}
+                          {planLabel(p)}
                           {p.id === currentPackageId ? " (current)" : ""}
+                          {!p.is_active ? " (hidden from patients)" : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -394,19 +436,12 @@ export function RequestChangeMedicineDialog({
           </p>
         ) : null}
 
-        {selectedPkg && !isUnchanged && hideFinancial ? (
-          <p className="text-xs text-muted-foreground">
-            If this plan differs from the current one, the patient may need to confirm before the
-            prescription can be generated.
-          </p>
-        ) : null}
-
-        {selectedPkg && !isUnchanged && diff != null && !hideFinancial ? (
+        {selectedPkg && !isUnchanged && diff != null ? (
           <div className="rounded-lg border bg-muted/20 p-3 text-sm space-y-1">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Current price</span>
               <span className="font-medium">
-                {current.price != null ? formatDollars(current.price) : "—"}
+                {currentPlanPrice != null ? formatDollars(currentPlanPrice) : "—"}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -434,10 +469,16 @@ export function RequestChangeMedicineDialog({
             </div>
             <p className="text-xs text-muted-foreground pt-1">
               {diff > 0
-                ? "The patient will be asked to pay this difference before the prescription is generated."
+                ? hideFinancial
+                  ? "The patient pays this difference or declines it. After payment, the prescription is sent to the pharmacy. If they decline, or do neither within 7 days, the previous medicine and plan are restored and they are not charged."
+                  : "The patient pays this difference. After that payment, the prescription is sent to the pharmacy."
                 : diff < 0
-                  ? "This credit settles on the patient's next billing cycle."
-                  : "No price change."}
+                  ? hideFinancial
+                    ? "The patient approves or rejects this change. Approval sends it to the pharmacy and credits this amount on the next bill. A rejection, or no response within 7 days, restores the previous medicine and plan. Nothing is charged."
+                    : "Nothing else is asked of the patient. The prescription is sent to the pharmacy now, and this credit applies to the next bill."
+                  : hideFinancial
+                    ? "The patient approves or rejects this change. Approval sends it to the pharmacy. A rejection, or no response within 7 days, restores the previous medicine and plan."
+                    : "No price change. The prescription is sent to the pharmacy now."}
             </p>
           </div>
         ) : null}

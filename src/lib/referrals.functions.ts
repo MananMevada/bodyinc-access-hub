@@ -12,7 +12,7 @@ const listInput = z
 
 export const listReferrals = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => listInput.parse(input ?? {}))
+  .validator((input: unknown) => listInput.parse(input ?? {}))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -85,7 +85,7 @@ const walletHistoryInput = z.object({ userId: z.string().uuid() });
 
 export const getPatientWallet = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => walletHistoryInput.parse(input))
+  .validator((input: unknown) => walletHistoryInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -140,7 +140,7 @@ const adjustInput = z.object({
 
 export const adjustPatientWallet = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => adjustInput.parse(input))
+  .validator((input: unknown) => adjustInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

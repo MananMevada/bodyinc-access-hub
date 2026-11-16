@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { medicinesQueryOptions } from "@/lib/query-options/medicines";
+import { listMedicinesForChange } from "@/lib/medicines.functions";
 import { changeSubscriptionMedicine } from "@/lib/orders.functions";
 import type { StoredMedicinePackage } from "@/lib/medicines.store";
 import { formatDate, formatDollars } from "@/lib/format";
@@ -59,7 +59,12 @@ export function ChangeMedicineDialog({
   onChanged: () => void;
   current: ChangeMedicineCurrent;
 }) {
-  const medicinesQ = useQuery(medicinesQueryOptions());
+  const loadMedicines = useServerFn(listMedicinesForChange);
+  const medicinesQ = useQuery({
+    queryKey: ["medicines-for-change"],
+    queryFn: () => loadMedicines({ data: {} }),
+    enabled: open,
+  });
   const change = useServerFn(changeSubscriptionMedicine);
 
   const [search, setSearch] = useState("");
@@ -77,7 +82,7 @@ export function ChangeMedicineDialog({
   }, [open]);
 
   const medicines = useMemo(
-    () => (medicinesQ.data ?? []).filter((m) => m.is_active),
+    () => (medicinesQ.data ?? []).filter((m) => m.is_active || m.show_to_providers),
     [medicinesQ.data],
   );
 
@@ -88,17 +93,18 @@ export function ChangeMedicineDialog({
   }, [medicines, search]);
 
   const medicine = medicines.find((m) => m.id === medicineId) ?? null;
+  const hiddenFromPatients = Boolean(medicine && !medicine.is_active);
   const hasVariants = (medicine?.variants.length ?? 0) > 0;
   const activeVariants = useMemo(
-    () => (medicine?.variants ?? []).filter((v) => v.is_active),
-    [medicine],
+    () => (medicine?.variants ?? []).filter((v) => v.is_active || hiddenFromPatients),
+    [medicine, hiddenFromPatients],
   );
   const variant = hasVariants ? (activeVariants.find((v) => v.id === variantId) ?? null) : null;
 
+  const rawPlans = hasVariants ? (variant?.packages ?? []) : (medicine?.packages ?? []);
   const packages = useMemo(() => {
-    const list = hasVariants ? (variant?.packages ?? []) : (medicine?.packages ?? []);
-    return list.filter((p) => p.is_active && p.stripe_price_id);
-  }, [hasVariants, variant, medicine]);
+    return rawPlans.filter((p) => p.stripe_price_id && (p.is_active || hiddenFromPatients));
+  }, [rawPlans, hiddenFromPatients]);
 
   // Auto-select the only variant / package when there is just one.
   useEffect(() => {
@@ -219,7 +225,10 @@ export function ChangeMedicineDialog({
                       }`}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium truncate">{m.name}</div>
+                        <div className="font-medium truncate">
+                          {m.name}
+                          {!m.is_active ? " (hidden from patients)" : ""}
+                        </div>
                         {fromPrice != null ? (
                           <div className="text-xs text-muted-foreground">
                             from {formatDollars(fromPrice)}/mo
@@ -250,6 +259,7 @@ export function ChangeMedicineDialog({
                     {activeVariants.map((v) => (
                       <SelectItem key={v.id} value={v.id}>
                         {v.name}
+                        {!v.is_active ? " (hidden from patients)" : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -262,7 +272,9 @@ export function ChangeMedicineDialog({
                 <Label className="text-xs">Plan</Label>
                 {packages.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
-                    No purchasable plan for this selection.
+                    {rawPlans.some((p) => !p.stripe_price_id)
+                      ? "This plan is not synced to Stripe yet. Open the medicine, save it, and try again."
+                      : "No purchasable plan for this selection."}
                   </p>
                 ) : (
                   <Select value={packageId} onValueChange={setPackageId}>
@@ -273,6 +285,7 @@ export function ChangeMedicineDialog({
                       {packages.map((p) => (
                         <SelectItem key={p.id} value={p.id}>
                           {planLabel(p)}
+                          {!p.is_active ? " (hidden from patients)" : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>

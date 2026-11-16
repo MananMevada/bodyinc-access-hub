@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useFieldArray, Controller } from "react-hook-form";
 import type {
   Control,
@@ -20,7 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ConfirmDeleteDialog } from "@/components/admin/confirm-delete-dialog";
 import { MedicinePackagesEditor } from "@/components/admin/medicine-packages-editor";
+import { RequiredMark } from "@/components/admin/required-mark";
 import type { MedicineFormValues } from "@/lib/medicines.schema";
 import {
   CardDivider,
@@ -135,6 +138,7 @@ export function MedicinePricingSection({
 }: Props) {
   const variantsArray = useFieldArray({ control, name: "variants" });
   const hasVariants = variantsArray.fields.length > 0;
+  const [variantToRemove, setVariantToRemove] = useState<number | null>(null);
 
   function addFirstVariant() {
     const current = getValues("packages") ?? [];
@@ -202,12 +206,17 @@ export function MedicinePricingSection({
         >
           <div className="grid grid-cols-1 items-start gap-3 min-[480px]:grid-cols-[minmax(0,1fr)_auto_auto]">
             <div className="min-w-0 space-y-1">
-              <Label className="text-[16px] font-medium text-[#152A51]">Variant name</Label>
+              <Label className="text-[16px] font-medium text-[#152A51]">
+                Variant name
+                <RequiredMark />
+              </Label>
               <Input
                 {...register(`variants.${vIndex}.name`)}
                 placeholder="e.g. 2mg/0.5ml (2mL Vial)"
                 disabled={submitting}
-                className={medicineInput}
+                className={`${medicineInput} ${
+                  errors.variants?.[vIndex]?.name?.message ? "!border-red-500" : ""
+                }`}
               />
               {errors.variants?.[vIndex]?.name?.message && (
                 <p className="text-xs text-destructive">
@@ -235,7 +244,7 @@ export function MedicinePricingSection({
               size="icon"
               className="mt-0 h-[45px] w-[45px] rounded-[14px] text-[#3B4759]/60 hover:bg-destructive/5 hover:text-destructive min-[480px]:mt-6"
               disabled={submitting}
-              onClick={() => variantsArray.remove(vIndex)}
+              onClick={() => setVariantToRemove(vIndex)}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -279,6 +288,17 @@ export function MedicinePricingSection({
       >
         <Plus className="h-4 w-4" /> Add variant
       </button>
+      <ConfirmDeleteDialog
+        open={variantToRemove !== null}
+        title="Remove this variant?"
+        description="This variant and its packages will be removed when you save the medicine."
+        confirmLabel="Remove"
+        onCancel={() => setVariantToRemove(null)}
+        onConfirm={() => {
+          if (variantToRemove !== null) variantsArray.remove(variantToRemove);
+          setVariantToRemove(null);
+        }}
+      />
     </div>
   );
 }

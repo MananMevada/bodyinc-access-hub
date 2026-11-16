@@ -56,12 +56,18 @@ export function formatDateTimeFull(iso?: string | null): string {
 /** Whole years between a date of birth and today. */
 
 /**
- * Human-facing record ID label: "#BI-9A3F" (first 4 chars of the UUID, uppercased).
- * Display-only — full IDs remain in URLs and API calls.
+ * Patient Portal–compatible short ID: strip hyphens, uppercase, first 4 hex → "#BI-A1B2".
+ * Display-only — full UUIDs remain in URLs and API calls.
  */
+export function formatBiId(uuid: string): string {
+  const compact = uuid.replace(/-/g, "").toUpperCase();
+  return `#BI-${compact.slice(0, 4)}`;
+}
+
+/** Null-safe display wrapper around {@link formatBiId}. */
 export function formatRecordId(id?: string | null): string {
   if (!id) return "—";
-  return `#BI-${String(id).slice(0, 4).toUpperCase()}`;
+  return formatBiId(id);
 }
 
 /** Strip a "#BI-"/"BI-"/"#" prefix so users can paste a displayed ID into search. */

@@ -11,8 +11,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getProvider, updateProvider, enableQuickbloxAgent } from "@/lib/providers.functions";
 import { adminBtnPrimary, adminCard, adminSectionTitle } from "@/lib/admin-ui";
-import { ProviderLifeFileCredentialsSection } from "@/components/admin/provider-lifefile-credentials";
-
 const ProviderForm = lazy(() =>
   import("@/components/admin/provider-form").then((m) => ({ default: m.ProviderForm })),
 );
@@ -123,7 +121,6 @@ function EditProviderPage() {
           </Button>
         </CardContent>
       </Card>
-      <ProviderLifeFileCredentialsSection providerId={providerId} />
       <Suspense fallback={<FormSkeleton />}>
         <ProviderForm
           mode="edit"

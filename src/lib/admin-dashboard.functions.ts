@@ -9,7 +9,7 @@ const input = z
 
 export const getAdminDashboard = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((raw: unknown) => input.parse(raw ?? {}))
+  .validator((raw: unknown) => input.parse(raw ?? {}))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

@@ -460,6 +460,80 @@ export async function checkJotformSubmission(
   }
 }
 
+export type JotformPurchaseMatch = {
+  submissionId: string;
+  submittedAt: string | null;
+};
+
+/**
+ * Match recent intake submissions to a specific shop purchase.
+ * Only a submission that carries this subscription, appointment, or consultation id counts.
+ */
+export async function jotformSubmissionsForPurchases(
+  purchases: {
+    subscriptionId: string;
+    appointmentId?: string | null;
+    consultationId?: string | null;
+  }[],
+): Promise<Map<string, JotformPurchaseMatch>> {
+  const found = new Map<string, JotformPurchaseMatch>();
+  const bySubscription = new Map<string, string>();
+  const byAppointment = new Map<string, string>();
+  const byConsultation = new Map<string, string>();
+  for (const purchase of purchases) {
+    if (!purchase.subscriptionId) continue;
+    bySubscription.set(purchase.subscriptionId.trim().toLowerCase(), purchase.subscriptionId);
+    if (purchase.appointmentId) {
+      byAppointment.set(purchase.appointmentId.trim().toLowerCase(), purchase.subscriptionId);
+    }
+    if (purchase.consultationId) {
+      byConsultation.set(purchase.consultationId.trim().toLowerCase(), purchase.subscriptionId);
+    }
+  }
+  if (bySubscription.size === 0) return found;
+
+  const { apiKey, intakeFormId, apiBase } = getJotformConfig();
+  if (!apiKey || !intakeFormId) return found;
+
+  try {
+    const url = `${apiBase}/form/${intakeFormId}/submissions?apiKey=${encodeURIComponent(apiKey)}&limit=50&orderby=created_at`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      console.warn(`[Jotform] purchase match failed (${res.status})`);
+      return found;
+    }
+    const data = (await res.json()) as { content?: JotformSubmissionItem[] };
+    const submissions = Array.isArray(data.content) ? data.content : [];
+    for (const submission of submissions) {
+      if (submission.status && submission.status.toUpperCase() === "DELETED") continue;
+      const extracted = extractSubmissionDetails(submission.answers || {});
+      const subscriptionId =
+        (extracted.subscriptionId
+          ? bySubscription.get(extracted.subscriptionId.trim().toLowerCase())
+          : undefined) ||
+        (extracted.appointmentId
+          ? byAppointment.get(extracted.appointmentId.trim().toLowerCase())
+          : undefined) ||
+        (extracted.consultationId
+          ? byConsultation.get(extracted.consultationId.trim().toLowerCase()) ||
+            byAppointment.get(extracted.consultationId.trim().toLowerCase())
+          : undefined);
+      if (!subscriptionId || found.has(subscriptionId)) continue;
+      found.set(subscriptionId, {
+        submissionId: submission.id,
+        submittedAt: submission.created_at ?? null,
+      });
+    }
+  } catch (error) {
+    console.warn("[Jotform] error matching purchase submissions:", error);
+  }
+  return found;
+}
+
 /**
  * Fetches structured answers for a given JotForm submission.
  */

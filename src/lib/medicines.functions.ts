@@ -1,10 +1,63 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
-import { assertAdmin } from "@/lib/admin-guard";
+import { assertAdmin, assertReviewer } from "@/lib/admin-guard";
+import { toStoredMedicine, type StoredMedicine } from "@/lib/medicines.store";
 import { archiveInStripe, BILLING_SUBSCRIPTION_STATUSES } from "@/lib/stripe-objects";
 
 const syncInput = z.object({ medicineId: z.string().uuid() });
+
+const CHANGE_MEDICINE_COLUMNS =
+  "id, name, short_description, long_description, image_url, from_price_cents, status, important_info, notice_text, sort_order, is_active, requires_questionnaire, requires_consultation, requires_followup, show_to_providers, lf_product_id, created_at, updated_at, medication_category_medicines(category_id), packages(id, name, duration_months, original_price, price, is_most_popular, is_active, features, clinical_note, sort_order, stripe_price_id, variant_id), medicine_variants(id, name, is_active, lf_product_id, from_price_cents, sort_order)";
+
+// The provider catalog hides doses on a medicine that is off the patient shop.
+// Change-medicine still needs those doses when the medicine is marked for providers.
+export const listMedicinesForChange = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: unknown) =>
+    z
+      .object({ currentMedicineId: z.string().uuid().optional() })
+      .parse(input ?? {}),
+  )
+  .handler(async ({ data, context }): Promise<StoredMedicine[]> => {
+    await assertReviewer(context);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: rows, error } = await supabaseAdmin
+      .from("medicines")
+      .select(CHANGE_MEDICINE_COLUMNS)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return ((rows ?? []) as any[])
+      .filter(
+        (row) =>
+          row.is_active ||
+          row.show_to_providers ||
+          row.id === data.currentMedicineId,
+      )
+      .map((row) => toStoredMedicine(row));
+  });
+
+export async function planIsSelectable(
+  supabaseAdmin: any,
+  pkg: { is_active?: boolean | null; medicine_id?: string | null; stripe_price_id?: string | null },
+): Promise<void> {
+  if (!pkg.stripe_price_id) {
+    throw new Error(
+      "This plan isn't synced to Stripe yet. Open the medicine and save it, then retry.",
+    );
+  }
+  if (pkg.is_active) return;
+  const { data: med } = pkg.medicine_id
+    ? await supabaseAdmin
+        .from("medicines")
+        .select("is_active, show_to_providers")
+        .eq("id", pkg.medicine_id)
+        .maybeSingle()
+    : { data: null };
+  if (med && med.is_active === false && med.show_to_providers) return;
+  throw new Error("Selected plan is inactive.");
+}
 const deleteInput = z.object({ medicineId: z.string().uuid() });
 
 export type MedicineDeletionImpact = {
@@ -51,7 +104,7 @@ async function measureDeletionImpact(
 // rather than the delete failing (or silently orphaning a subscription) after they click.
 export const getMedicineDeletionImpact = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => deleteInput.parse(input))
+  .validator((input: unknown) => deleteInput.parse(input))
   .handler(async ({ data, context }): Promise<MedicineDeletionImpact> => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -64,7 +117,7 @@ export const getMedicineDeletionImpact = createServerFn({ method: "POST" })
 // clause, so Postgres would reject those anyway; catching it here gives a usable message.
 export const deleteMedicineSafely = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => deleteInput.parse(input))
+  .validator((input: unknown) => deleteInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -84,30 +137,49 @@ export const deleteMedicineSafely = createServerFn({ method: "POST" })
       );
     }
 
-    const [{ data: medicine }, { data: packages }, { data: variants }] = await Promise.all([
-      supabaseAdmin
-        .from("medicines")
-        .select("stripe_product_id")
-        .eq("id", data.medicineId)
-        .maybeSingle(),
-      supabaseAdmin.from("packages").select("stripe_price_id").eq("medicine_id", data.medicineId),
-      supabaseAdmin
-        .from("medicine_variants")
-        .select("stripe_product_id")
-        .eq("medicine_id", data.medicineId),
+    const { backupThen, fetchMatching, newBackupId } = await import("@/lib/data-backup.server");
+    const db = supabaseAdmin as any;
+    const [medicineRows, packages, variants, links, questionnaireLinks] = await Promise.all([
+      fetchMatching(db, "medicines", "id", [data.medicineId]),
+      fetchMatching(db, "packages", "medicine_id", [data.medicineId]),
+      fetchMatching(db, "medicine_variants", "medicine_id", [data.medicineId]),
+      fetchMatching(db, "medication_category_medicines", "medicine_id", [data.medicineId]),
+      fetchMatching(db, "questionnaire_medicines", "medicine_id", [data.medicineId]),
     ]);
+    const medicine = medicineRows[0] as { name?: string; stripe_product_id?: string | null } | undefined;
 
-    const archiveResult = await archiveInStripe(
-      getStripe(),
-      (packages ?? []).map((p: any) => p.stripe_price_id).filter(Boolean),
-      [
-        ...(variants ?? []).map((v: any) => v.stripe_product_id),
-        medicine?.stripe_product_id,
-      ].filter(Boolean) as string[],
+    let archiveResult: { archived: number; failed: { id: string; error: string }[] } = {
+      archived: 0,
+      failed: [],
+    };
+    await backupThen(
+      db,
+      {
+        wipeId: newBackupId(),
+        group: "catalog",
+        wipedBy: context.userId,
+        label: medicine?.name?.trim() || "Medicine",
+        batches: [
+          { table: "medicines", rows: medicineRows },
+          { table: "medicine_variants", rows: variants },
+          { table: "packages", rows: packages },
+          { table: "medication_category_medicines", rows: links },
+          { table: "questionnaire_medicines", rows: questionnaireLinks },
+        ],
+      },
+      async () => {
+        archiveResult = await archiveInStripe(
+          getStripe(),
+          packages.map((p: { stripe_price_id?: string | null }) => p.stripe_price_id).filter(Boolean) as string[],
+          [
+            ...variants.map((v: { stripe_product_id?: string | null }) => v.stripe_product_id),
+            medicine?.stripe_product_id,
+          ].filter(Boolean) as string[],
+        );
+        const { error } = await supabaseAdmin.from("medicines").delete().eq("id", data.medicineId);
+        if (error) throw new Error(error.message);
+      },
     );
-
-    const { error } = await supabaseAdmin.from("medicines").delete().eq("id", data.medicineId);
-    if (error) throw new Error(error.message);
 
     return {
       ok: true as const,
@@ -119,7 +191,7 @@ export const deleteMedicineSafely = createServerFn({ method: "POST" })
 // Creates or updates the Stripe Product that a medicine maps to, storing its id.
 export const syncMedicineToStripe = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => syncInput.parse(input))
+  .validator((input: unknown) => syncInput.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

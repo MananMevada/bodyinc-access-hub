@@ -134,7 +134,7 @@ function buildRoleResult(
 }
 
 export const signInWithPassword = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => credentialsSchema.parse(input))
+  .validator((input: unknown) => credentialsSchema.parse(input))
   .handler(async ({ data }): Promise<SignInResult> => {
     const supabase = serverSupabase();
 
@@ -204,7 +204,7 @@ export type SendLoginOtpResult =
   | { ok: false; error: "send_failed"; message: string };
 
 export const sendLoginOtp = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => loginOtpSchema.parse(input))
+  .validator((input: unknown) => loginOtpSchema.parse(input))
   .handler(async ({ data }): Promise<SendLoginOtpResult> => {
     try {
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -278,7 +278,7 @@ export const sendLoginOtp = createServerFn({ method: "POST" })
   });
 
 export const requestPasswordReset = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => passwordResetSchema.parse(input))
+  .validator((input: unknown) => passwordResetSchema.parse(input))
   .handler(async ({ data }): Promise<RequestPasswordResetResult> => {
     try {
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -351,7 +351,7 @@ export const requestPasswordReset = createServerFn({ method: "POST" })
   });
 
 export const verifyPasswordResetOtp = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => verifyOtpSchema.parse(input))
+  .validator((input: unknown) => verifyOtpSchema.parse(input))
   .handler(async ({ data }): Promise<SignInResult> => {
     const supabase = serverSupabase();
     let verifyData: {
@@ -402,7 +402,7 @@ export const verifyPasswordResetOtp = createServerFn({ method: "POST" })
   });
 
 export const verifyLoginOtp = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => verifyOtpSchema.parse(input))
+  .validator((input: unknown) => verifyOtpSchema.parse(input))
   .handler(async ({ data }): Promise<SignInResult> => {
     const supabase = serverSupabase();
 
@@ -460,7 +460,7 @@ export const verifyLoginOtp = createServerFn({ method: "POST" })
   });
 
 export const openRecoverySession = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ reset_code: z.string().trim().min(32).max(128) }).parse(input),
   )
   .handler(async ({ data }) => {
@@ -471,7 +471,7 @@ export const openRecoverySession = createServerFn({ method: "POST" })
 
 export const saveNewPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ password: z.string().min(8).max(128) }).parse(input),
   )
   .handler(async ({ data, context }) => {
