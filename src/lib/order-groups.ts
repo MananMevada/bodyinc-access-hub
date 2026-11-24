@@ -303,21 +303,40 @@ export async function findGroupConsultation(supabaseAdmin: any, siblings: any[])
   const userIds = [...new Set(siblings.map((row) => row.user_id).filter(Boolean))];
   if (subIds.length === 0 && userIds.length === 0) return null;
   const cols = "id, qb_appointment_id, qb_dialog_id, qb_user_id, subscription_id, user_id, started_at, ended_at";
-  let q = supabaseAdmin.from("patient_consultations").select(cols).order("started_at", { ascending: true });
-  q = subIds.length ? q.in("subscription_id", subIds) : q.in("user_id", userIds);
-  let res = await q;
-  if (res.error && /ended_at/i.test(res.error.message ?? "")) {
-    let retry = supabaseAdmin
-      .from("patient_consultations")
-      .select(cols.replace(", ended_at", ""))
-      .order("started_at", { ascending: true });
-    retry = subIds.length ? retry.in("subscription_id", subIds) : retry.in("user_id", userIds);
-    res = await retry;
+
+  // 1. Prioritize matching by exact subscription_id (order-specific consultation)
+  if (subIds.length > 0) {
+    let qSub = supabaseAdmin.from("patient_consultations").select(cols).in("subscription_id", subIds).order("started_at", { ascending: false });
+    let resSub = await qSub;
+    if (resSub.error && /ended_at/i.test(resSub.error.message ?? "")) {
+      resSub = await supabaseAdmin.from("patient_consultations").select(cols.replace(", ended_at", "")).in("subscription_id", subIds).order("started_at", { ascending: false });
+    }
+    const subRows = (resSub.data ?? []) as any[];
+    if (subRows.length > 0) {
+      return (
+        subRows.find((row) => (row.qb_dialog_id || row.qb_appointment_id) && !row.ended_at) ??
+        subRows.find((row) => row.qb_dialog_id || row.qb_appointment_id) ??
+        subRows[0]
+      );
+    }
   }
-  if (res.error) {
-    if (res.error.code === "42P01" || /patient_consultations/i.test(res.error.message ?? "")) return null;
-    throw new Error(res.error.message);
+
+  // 2. Fallback: match by patient user_id (newest first)
+  if (userIds.length > 0) {
+    let qUser = supabaseAdmin.from("patient_consultations").select(cols).in("user_id", userIds).order("started_at", { ascending: false });
+    let resUser = await qUser;
+    if (resUser.error && /ended_at/i.test(resUser.error.message ?? "")) {
+      resUser = await supabaseAdmin.from("patient_consultations").select(cols.replace(", ended_at", "")).in("user_id", userIds).order("started_at", { ascending: false });
+    }
+    const userRows = (resUser.data ?? []) as any[];
+    if (userRows.length > 0) {
+      return (
+        userRows.find((row) => (row.qb_dialog_id || row.qb_appointment_id) && !row.ended_at) ??
+        userRows.find((row) => row.qb_dialog_id || row.qb_appointment_id) ??
+        userRows[0]
+      );
+    }
   }
-  const rows = (res.data ?? []) as any[];
-  return rows.find((row) => row.qb_appointment_id && !row.ended_at) ?? rows.find((row) => row.qb_appointment_id) ?? null;
+
+  return null;
 }

@@ -2124,68 +2124,68 @@ export const assignRequestProvider = createServerFn({ method: "POST" })
             }
           }
 
-          const conds: string[] = [];
-          if (existing.subscription_id)
-            conds.push(`subscription_id.eq.${existing.subscription_id}`);
-          if (existing.user_id) conds.push(`user_id.eq.${existing.user_id}`);
-
-          let consultations: any[] = [];
-          if (conds.length > 0) {
-            const { data: cRows } = await supabaseAdmin
+          const siblings = await loadSiblingRows(supabaseAdmin, existing.id);
+          let targetConsultation = await findGroupConsultation(
+            supabaseAdmin,
+            siblings.length ? siblings : [existing],
+          );
+          if (!targetConsultation && existing.subscription_id) {
+            const { data: directConsult } = await supabaseAdmin
               .from("patient_consultations")
-              .select("id, qb_appointment_id, qb_user_id, qb_dialog_id, started_at")
-              .or(conds.join(","));
-            consultations = cRows ?? [];
+              .select(
+                "id, qb_appointment_id, qb_dialog_id, qb_user_id, subscription_id, user_id, started_at, ended_at",
+              )
+              .eq("subscription_id", existing.subscription_id)
+              .order("started_at", { ascending: false })
+              .maybeSingle();
+            targetConsultation = directConsult;
           }
 
           const qbConfig = getQuickbloxConfig();
-          const adminQbId = qbConfig.providerId ?? 142814409;
+          const adminQbId = qbConfig.providerId ?? 143129220;
 
-          if (consultations.length > 0) {
-            for (const c of consultations) {
-              if (c.qb_appointment_id) {
-                try {
-                  const res = await reassignAppointmentToProvider({
-                    appointmentId: c.qb_appointment_id,
-                    qbProviderId: agent.qbUserId,
-                    currentProviderToken: prevToken,
-                    dialogId: c.qb_dialog_id ?? null,
-                  });
-                  const activeDialogId = res?.dialogId || c.qb_dialog_id;
-                  if (res?.dialogId && !c.qb_dialog_id) {
-                    await supabaseAdmin
-                      .from("patient_consultations")
-                      .update({ qb_dialog_id: res.dialogId })
-                      .eq("id", c.id);
-                  }
-                  if (activeDialogId) {
-                    const occupants = [agent.qbUserId, adminQbId];
-                    if (c.qb_user_id) occupants.push(c.qb_user_id);
-                    await ensureDialogOccupants({
-                      dialogId: activeDialogId,
-                      occupantsIds: occupants,
-                    });
-                    if (
-                      prevQbUserId &&
-                      prevQbUserId !== agent.qbUserId &&
-                      prevQbUserId !== adminQbId &&
-                      prevQbUserId !== c.qb_user_id
-                    ) {
-                      await removeDialogOccupants({
-                        dialogId: activeDialogId,
-                        occupantsIds: [prevQbUserId],
-                        token: prevToken,
-                      });
-                    }
-                    await sendChatMessageToDialog({
-                      dialogId: activeDialogId,
-                      message: assignmentNote,
-                    });
-                  }
-                } catch (rErr) {
-                  console.warn("[assignRequestProvider] reassign error:", rErr);
-                }
+          if (targetConsultation && targetConsultation.qb_appointment_id) {
+            const c = targetConsultation;
+            try {
+              const res = await reassignAppointmentToProvider({
+                appointmentId: c.qb_appointment_id,
+                qbProviderId: agent.qbUserId,
+                currentProviderToken: prevToken,
+                dialogId: c.qb_dialog_id ?? null,
+              });
+              const activeDialogId = res?.dialogId || c.qb_dialog_id || c.qb_appointment_id;
+              if (res?.dialogId && !c.qb_dialog_id) {
+                await supabaseAdmin
+                  .from("patient_consultations")
+                  .update({ qb_dialog_id: res.dialogId })
+                  .eq("id", c.id);
               }
+              if (activeDialogId) {
+                const occupants = [agent.qbUserId, adminQbId];
+                if (c.qb_user_id) occupants.push(c.qb_user_id);
+                await ensureDialogOccupants({
+                  dialogId: activeDialogId,
+                  occupantsIds: occupants,
+                });
+                if (
+                  prevQbUserId &&
+                  prevQbUserId !== agent.qbUserId &&
+                  prevQbUserId !== adminQbId &&
+                  prevQbUserId !== c.qb_user_id
+                ) {
+                  await removeDialogOccupants({
+                    dialogId: activeDialogId,
+                    occupantsIds: [prevQbUserId],
+                    token: prevToken,
+                  });
+                }
+                await sendChatMessageToDialog({
+                  dialogId: activeDialogId,
+                  message: assignmentNote,
+                });
+              }
+            } catch (rErr) {
+              console.warn("[assignRequestProvider] reassign error:", rErr);
             }
           } else if (existing.user_id && existing.subscription_id) {
             // No appointment in Supabase yet — provision it directly assigned to this doctor

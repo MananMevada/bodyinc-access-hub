@@ -41,6 +41,9 @@ import {
   ListFilter,
   Users,
   Truck,
+  UserCheck,
+  UserPlus,
+  Shield,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -48,6 +51,14 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -560,6 +571,7 @@ export function ConsultationRoomPage({
       }
 
       if (
+        senderId === 143129220 ||
         senderId === 142814409 ||
         (roomData?.quickblox.adminQbUserId && senderId === roomData.quickblox.adminQbUserId)
       ) {
@@ -1292,7 +1304,7 @@ export function ConsultationRoomPage({
         ...prev,
         {
           id: `assignment_${Date.now()}`,
-          senderId: roomData?.quickblox.providerSession.userId ?? 142814409,
+          senderId: roomData?.quickblox.providerSession.userId ?? roomData?.quickblox.adminQbUserId ?? 143129220,
           senderName: "System",
           senderRole: "system",
           body: assignmentChatAnnouncement,
@@ -1410,6 +1422,13 @@ export function ConsultationRoomPage({
       toast.success(res.message || "Consultation completed.");
       if (res.pharmacy_error) toast.error(res.pharmacy_error);
       endCall();
+      if (window.QB?.chat?.muc && activeDialogJid && clinicalOnly) {
+        try {
+          window.QB.chat.muc.leave(activeDialogJid);
+        } catch (leaveErr) {
+          console.warn("[QuickBlox] MUC leave error:", leaveErr);
+        }
+      }
       setFinishConfirmOpen(false);
       setFinishConclusion("");
       refetch();
@@ -1535,6 +1554,41 @@ export function ConsultationRoomPage({
   const isConsultationEnded = Boolean(
     roomData.consultation.isEnded || roomData.consultation.endedAt,
   );
+  const consultationStatus =
+    roomData.consultationStatus ||
+    (isConsultationEnded
+      ? "Consultation Finished"
+      : roomData.provider?.id
+        ? "Consultation Active"
+        : "Pending");
+
+  const roomParticipants = roomData.participants || [
+    {
+      id: roomData.quickblox.patientQbUserId,
+      name: patient.name,
+      role: "patient" as const,
+      isActive: true,
+      statusLabel: "Active",
+    },
+    {
+      id: roomData.quickblox.adminQbUserId ?? 143129220,
+      name: "Admin",
+      role: "admin" as const,
+      isActive: true,
+      statusLabel: "Active",
+    },
+    ...(roomData.provider?.id
+      ? [
+          {
+            id: null,
+            name: roomData.provider.full_name || "Doctor",
+            role: "provider" as const,
+            isActive: !isConsultationEnded,
+            statusLabel: isConsultationEnded ? "Removed (Consultation Finished)" : "Active",
+          },
+        ]
+      : []),
+  ];
 
   // Live Queue calculations
   const liveQueueList = roomData.liveQueue ?? [];
@@ -1607,21 +1661,173 @@ export function ConsultationRoomPage({
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-[#152A51]">{patient.name}</span>
-                {isConsultationEnded && (
-                  <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100 text-[11px]">
-                    Consultation Ended
+                {consultationStatus === "Consultation Finished" && (
+                  <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100 text-[11px] border border-slate-300 gap-1 font-semibold">
+                    <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                    Consultation Finished
+                  </Badge>
+                )}
+                {consultationStatus === "Consultation Active" && (
+                  <Badge className="bg-emerald-50 text-emerald-800 hover:bg-emerald-50 text-[11px] border border-emerald-300 gap-1.5 font-semibold">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                    </span>
+                    Consultation Active
+                  </Badge>
+                )}
+                {consultationStatus === "Doctor Assigned" && (
+                  <Badge className="bg-blue-50 text-blue-800 hover:bg-blue-50 text-[11px] border border-blue-300 gap-1 font-semibold">
+                    <UserCheck className="h-3 w-3 text-blue-600" />
+                    Doctor Assigned
+                  </Badge>
+                )}
+                {consultationStatus === "Pending" && (
+                  <Badge className="bg-amber-50 text-amber-800 hover:bg-amber-50 text-[11px] border border-amber-300 gap-1 font-semibold">
+                    <Clock className="h-3 w-3 text-amber-600" />
+                    Pending Doctor Assignment
                   </Badge>
                 )}
               </div>
               <div className="text-[11px] text-[#3B4759]/70 font-medium">
                 Order ID {formatRecordId(roomData.request.id)}
+                {roomData.medicine?.name ? ` · ${roomData.medicine.name}` : ""}
               </div>
             </div>
           </div>
         </div>
 
         {/* Header Right Actions */}
-        <div className="flex items-center gap-2" />
+        <div className="flex items-center gap-2.5">
+          {/* Participants Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 px-3 text-xs border-[#D5DEDD] bg-white text-[#152A51] hover:bg-[#F3F6F6] shadow-2xs font-semibold"
+                title="View Consultation Room Participants"
+              >
+                <Users className="h-3.5 w-3.5 text-[#152A51]" />
+                <span>
+                  Participants (
+                  {roomParticipants.filter((p) => p.isActive).length})
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-80 p-2.5 shadow-lg">
+              <DropdownMenuLabel className="p-0 font-bold text-xs text-[#152A51]">
+                Consultation Room Participants
+              </DropdownMenuLabel>
+              <p className="text-[11px] text-[#3B4759]/70 mt-0.5 mb-2 leading-relaxed">
+                Single shared room for this consultation. All communication happens in this room.
+              </p>
+              <DropdownMenuSeparator />
+              <div className="space-y-2 py-1">
+                {roomParticipants.map((p, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between gap-2 p-1.5 rounded-lg hover:bg-[#F9FBFA]"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                          p.role === "admin"
+                            ? "bg-blue-600 text-white"
+                            : p.role === "provider"
+                              ? "bg-emerald-600 text-white"
+                              : "bg-[#152A51] text-white"
+                        }`}
+                      >
+                        {p.role === "admin"
+                          ? "A"
+                          : p.role === "provider"
+                            ? "Dr"
+                            : p.name.slice(0, 1).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-[#152A51] truncate">
+                          {p.name}
+                          {p.role === (clinicalOnly ? "provider" : "admin") ? " (You)" : ""}
+                        </div>
+                        <div className="text-[10px] text-[#3B4759]/60 capitalize">
+                          {p.role === "provider"
+                            ? "Assigned Clinician"
+                            : p.role === "admin"
+                              ? "Clinic Admin"
+                              : "Patient"}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      {p.isActive ? (
+                        <Badge className="bg-emerald-50 text-emerald-800 hover:bg-emerald-50 text-[10px] border border-emerald-300 font-semibold">
+                          Active
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] text-slate-500 border-slate-300 bg-slate-50">
+                          {p.statusLabel}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <DropdownMenuSeparator />
+              <div className="pt-1.5 text-[10px] text-[#3B4759]/60 flex items-center gap-1.5">
+                <Info className="h-3 w-3 text-[#6A9B9C] shrink-0" />
+                <span>
+                  {isConsultationEnded
+                    ? "Doctor has left the room. Patient and Admin remain active."
+                    : "Patient, Doctor, and Admin communicate together in this room."}
+                </span>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Action buttons */}
+          {clinicalOnly ? (
+            !isConsultationEnded ? (
+              <Button
+                size="sm"
+                onClick={() => setFinishConfirmOpen(true)}
+                className="h-9 bg-[#152A51] text-xs font-semibold text-white hover:bg-[#1C3665] shadow-xs gap-1.5"
+              >
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Finish Consultation</span>
+              </Button>
+            ) : (
+              <Badge className="bg-slate-100 text-slate-600 hover:bg-slate-100 text-xs px-2.5 py-1 border border-slate-300 gap-1 font-medium">
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                <span>Consultation Finished</span>
+              </Badge>
+            )
+          ) : (
+            <>
+              {!roomData.provider?.id && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigate({ to: backTo })}
+                  className="h-9 border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-semibold gap-1.5 shadow-2xs"
+                >
+                  <UserPlus className="h-3.5 w-3.5 text-amber-700" />
+                  <span>Assign Doctor</span>
+                </Button>
+              )}
+              {roomData.provider?.id && !isConsultationEnded && (
+                <Button
+                  size="sm"
+                  onClick={() => setFinishConfirmOpen(true)}
+                  className="h-9 bg-[#152A51] text-xs font-semibold text-white hover:bg-[#1C3665] shadow-xs gap-1.5"
+                >
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Finish Consultation</span>
+                </Button>
+              )}
+            </>
+          )}
+        </div>
       </header>
 
       {/* FINISHED CONSULTATION BANNER */}
@@ -1900,6 +2106,75 @@ export function ConsultationRoomPage({
             {/* SECTION 1: PATIENT PROFILE */}
             {sidebarTab === "profile" && (
               <div className="space-y-3">
+                <Card className="border-[#D5DEDD] shadow-none">
+                  <CardHeader className="p-3 pb-1">
+                    <CardTitle className="text-xs font-bold text-[#152A51] flex items-center justify-between">
+                      <span>Room Participants</span>
+                      <Badge variant="outline" className="text-[10px] font-semibold">
+                        {isConsultationEnded
+                          ? "2 Active"
+                          : roomData.provider?.id
+                            ? "3 Active"
+                            : "2 Active"}
+                      </Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-3 pt-1 space-y-2 text-xs divide-y divide-[#E8EEED]">
+                    <div className="pt-1 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <User className="h-3.5 w-3.5 text-[#152A51]" />
+                        <div>
+                          <div className="font-semibold text-[#152A51]">{patient.name}</div>
+                          <div className="text-[10px] text-[#3B4759]/60">Patient</div>
+                        </div>
+                      </div>
+                      <Badge className="bg-emerald-50 text-emerald-800 text-[10px] border border-emerald-300">
+                        Active
+                      </Badge>
+                    </div>
+
+                    <div className="pt-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Stethoscope className="h-3.5 w-3.5 text-emerald-600" />
+                        <div>
+                          <div className="font-semibold text-[#152A51]">
+                            {roomData.provider?.full_name || "Doctor"}
+                          </div>
+                          <div className="text-[10px] text-[#3B4759]/60">Assigned Clinician</div>
+                        </div>
+                      </div>
+                      {roomData.provider?.id ? (
+                        isConsultationEnded ? (
+                          <Badge variant="outline" className="text-[10px] text-slate-500 bg-slate-50 border-slate-300">
+                            Removed (Finished)
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-emerald-50 text-emerald-800 text-[10px] border border-emerald-300">
+                            Active
+                          </Badge>
+                        )
+                      ) : (
+                        <Badge className="bg-amber-50 text-amber-800 text-[10px] border border-amber-300">
+                          Unassigned
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="pt-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Shield className="h-3.5 w-3.5 text-blue-600" />
+                        <div>
+                          <div className="font-semibold text-[#152A51]">Body Inc Admin</div>
+                          <div className="text-[10px] text-[#3B4759]/60">Clinic Administrator</div>
+                        </div>
+                      </div>
+                      <Badge className="bg-blue-50 text-blue-800 text-[10px] border border-blue-300">
+                        Active
+                      </Badge>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <Card className="border-[#D5DEDD] shadow-none">
                   <CardHeader className="p-3 pb-1">
                     <CardTitle className="text-xs font-bold text-[#152A51]">
@@ -2309,7 +2584,7 @@ export function ConsultationRoomPage({
             )}
           </div>
 
-          {/* Sidebar Bottom: Prominent Finish Appointment Button */}
+          {/* Sidebar Bottom: Prominent Finish Consultation Button */}
           {!isConsultationEnded && (
             <div className="p-3 border-t border-[#D5DEDD] bg-[#F9FBFA]">
               <Button
@@ -2318,7 +2593,7 @@ export function ConsultationRoomPage({
                 className="w-full h-10 bg-[#152A51] text-xs font-semibold text-white hover:bg-[#1C3665] shadow-xs"
               >
                 <Check className="h-4 w-4 mr-1.5 text-emerald-400" />
-                Finish consultation appointment
+                Finish consultation
               </Button>
             </div>
           )}
@@ -2602,6 +2877,30 @@ export function ConsultationRoomPage({
                     <span className="text-[#3B4759]/70 text-[11px]">
                       {chatConnected ? "Encrypted Live Chat" : "Connecting to chat server…"}
                     </span>
+                    <div className="hidden xl:flex items-center gap-1.5 ml-2 pl-2 border-l border-[#D5DEDD]">
+                      <span className="text-[10px] text-[#3B4759]/60 font-medium">Room:</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-[#152A51] font-semibold">
+                        Patient
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                          isConsultationEnded
+                            ? "bg-slate-100 text-slate-500 line-through"
+                            : roomData.provider?.id
+                              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                              : "bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {isConsultationEnded
+                          ? "Doctor (Left)"
+                          : roomData.provider?.id
+                            ? (roomData.provider.full_name || "Doctor")
+                            : "Doctor (Unassigned)"}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 font-semibold">
+                        Admin
+                      </span>
+                    </div>
                   </div>
                   {patientTyping && (
                     <span className="text-emerald-700 font-medium text-[11px] animate-pulse">
@@ -2765,38 +3064,69 @@ export function ConsultationRoomPage({
                 )}
 
                 {/* Chat Input Bar */}
-                <form
-                  onSubmit={handleSendMessage}
-                  className="shrink-0 border-t border-[#D5DEDD] bg-white p-3 flex items-center gap-2"
-                >
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    disabled={uploadingFile}
-                    onClick={() => fileInputRef.current?.click()}
-                    className="h-10 w-10 text-[#3B4759] hover:bg-[#F3F6F6] shrink-0"
-                    title="Upload attachment / photo"
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </Button>
+                {clinicalOnly && isConsultationEnded ? (
+                  <div className="shrink-0 border-t border-[#D5DEDD] bg-slate-50 p-4 text-center">
+                    <div className="flex items-center justify-center gap-2 text-xs font-semibold text-slate-700">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      <span>Consultation finished. You have left this consultation room.</span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Active messaging is closed for the doctor. Complete consultation chat history is preserved.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="shrink-0 flex flex-col bg-white">
+                    {!clinicalOnly && isConsultationEnded && (
+                      <div className="flex items-center justify-between border-t border-blue-200 bg-blue-50/70 px-4 py-2 text-xs text-blue-900">
+                        <div className="flex items-center gap-2">
+                          <Info className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                          <span>
+                            Doctor has completed the consultation and left the room. You can continue post-consultation communication with the patient.
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-800 border-blue-300 shrink-0 font-semibold">
+                          Admin Active
+                        </Badge>
+                      </div>
+                    )}
+                    <form
+                      onSubmit={handleSendMessage}
+                      className="border-t border-[#D5DEDD] bg-white p-3 flex items-center gap-2"
+                    >
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={uploadingFile}
+                        onClick={() => fileInputRef.current?.click()}
+                        className="h-10 w-10 text-[#3B4759] hover:bg-[#F3F6F6] shrink-0"
+                        title="Upload attachment / photo"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                      </Button>
 
-                  <Input
-                    value={chatInput}
-                    onChange={handleChatInputChange}
-                    placeholder="Type a message to the patient…"
-                    className="h-10 flex-1 border-[#D5DEDD] text-xs focus-visible:ring-[#6A9B9C]"
-                  />
+                      <Input
+                        value={chatInput}
+                        onChange={handleChatInputChange}
+                        placeholder={
+                          !clinicalOnly && isConsultationEnded
+                            ? "Type a post-consultation message to the patient (Admin)…"
+                            : "Type a message to the patient…"
+                        }
+                        className="h-10 flex-1 border-[#D5DEDD] text-xs focus-visible:ring-[#6A9B9C]"
+                      />
 
-                  <Button
-                    type="submit"
-                    disabled={!chatInput.trim()}
-                    className="h-10 bg-[#6A9B9C] px-4 text-xs font-semibold text-white hover:bg-[#5A8788] shrink-0"
-                  >
-                    <Send className="h-3.5 w-3.5 mr-1" />
-                    <span>Send</span>
-                  </Button>
-                </form>
+                      <Button
+                        type="submit"
+                        disabled={!chatInput.trim()}
+                        className="h-10 bg-[#6A9B9C] px-4 text-xs font-semibold text-white hover:bg-[#5A8788] shrink-0"
+                      >
+                        <Send className="h-3.5 w-3.5 mr-1" />
+                        <span>Send</span>
+                      </Button>
+                    </form>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -3118,17 +3448,18 @@ export function ConsultationRoomPage({
         </DialogContent>
       </Dialog>
 
-      {/* FINISH APPOINTMENT CONCLUSION MODAL (Matching QuickBlox Web) */}
+      {/* FINISH CONSULTATION CONCLUSION MODAL */}
       <AlertDialog open={finishConfirmOpen} onOpenChange={setFinishConfirmOpen}>
         <AlertDialogContent className="font-['DM_Sans',sans-serif] max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-lg font-bold text-[#152A51] flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-              Summary for {patient.name}
+              Finish Consultation for {patient.name}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-xs text-[#3B4759]/80">
-              Conclude this consultation on QuickBlox and sync with the patient portal. A conclusion
-              summary will be recorded in the patient chart and notified in chat.
+              Conclude this consultation on QuickBlox. The doctor will be removed from the active
+              consultation room, while Admin and Patient remain in the room for any post-consultation
+              communication. All chat history is preserved.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -3191,7 +3522,7 @@ export function ConsultationRoomPage({
               ) : (
                 <Check className="h-4 w-4 mr-1.5 text-emerald-400" />
               )}
-              Finish Appointment
+              Finish Consultation
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

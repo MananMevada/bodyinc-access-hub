@@ -9,22 +9,22 @@ export function getQuickbloxConfig() {
   const apiKey = env("QUICKBLOX_API_KEY");
   const userSecret =
     env("QUICKBLOX_USER_SECRET") || "qwe12rty34uio56p5asd67fgh7jklz8xcv5bnm8";
-  const providerIdRaw = env("QUICKBLOX_PROVIDER_ID") || "142814409";
-  const providerId = providerIdRaw ? Number(providerIdRaw) : 142814409;
+  const providerIdRaw = env("QUICKBLOX_PROVIDER_ID") || "143129220";
+  const providerId = providerIdRaw ? Number(providerIdRaw) : 143129220;
 
   const appIdRaw =
     env("QUICKBLOX_APP_ID") ||
     env("VITE_QUICKBLOX_APP_ID") ||
-    "108471";
-  const appId = Number(appIdRaw) || 108471;
+    "108171";
+  const appId = Number(appIdRaw) || 108171;
   const authKey =
     env("QUICKBLOX_AUTH_KEY") ||
     env("VITE_QUICKBLOX_AUTH_KEY") ||
-    "ak_xjJy9Tuv9jDgdEw";
+    "ak_A7AYRVwvcRncutL";
   const authSecret =
     env("QUICKBLOX_AUTH_SECRET") ||
     env("VITE_QUICKBLOX_AUTH_SECRET") ||
-    "as_S6-E5A6Dwz-T2qb";
+    "as_HwzVstSPOLFsC9q";
   const accountKey =
     env("QUICKBLOX_ACCOUNT_KEY") ||
     env("VITE_QUICKBLOX_ACCOUNT_KEY") ||
@@ -36,7 +36,7 @@ export function getQuickbloxConfig() {
     providerPassword,
     apiKey,
     userSecret,
-    providerId: Number.isFinite(providerId) ? providerId : 142814409,
+    providerId: Number.isFinite(providerId) ? providerId : 143129220,
     appId,
     authKey,
     authSecret,

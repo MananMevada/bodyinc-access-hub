@@ -9,6 +9,7 @@ import {
   claimAppointmentForSession,
   createPatientAppointment,
   endQuickbloxAppointment,
+  ensureDialogOccupants,
   ensurePatientQuickbloxClient,
   getAppointmentById,
   getOwnerProviderAuth,
@@ -16,6 +17,7 @@ import {
   listAllAppointments,
   listProviderAppointments,
   qbPasswordForProvider,
+  removeDialogOccupants,
   type QbAppointment,
   type QuickbloxProviderSession,
 } from "@/lib/consultations/quickblox";
@@ -563,6 +565,17 @@ export const startRequestConsultation = createServerFn({ method: "POST" })
         supabaseAdmin,
         siblings.length ? siblings : [req],
       );
+      if (!existing && req.subscription_id) {
+        const { data: directConsult } = await supabaseAdmin
+          .from("patient_consultations")
+          .select(
+            "id, qb_appointment_id, qb_dialog_id, qb_user_id, subscription_id, user_id, started_at, ended_at",
+          )
+          .eq("subscription_id", req.subscription_id)
+          .order("started_at", { ascending: false })
+          .maybeSingle();
+        existing = directConsult;
+      }
     } catch (lookupError) {
       return {
         ok: false,
@@ -929,6 +942,14 @@ export type ConsultationRoomData = {
     userDirectory?: Record<number, { name: string; role: "admin" | "provider" | "patient" }>;
   };
   liveQueue: LiveQueueItem[];
+  consultationStatus: "Pending" | "Doctor Assigned" | "Consultation Active" | "Consultation Finished";
+  participants: Array<{
+    id: number | null;
+    name: string;
+    role: "patient" | "provider" | "admin";
+    isActive: boolean;
+    statusLabel: string;
+  }>;
 };
 
 export const getConsultationRoomDetails = createServerFn({ method: "POST" })
@@ -972,12 +993,24 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
           supabaseAdmin,
           groupSiblings.length ? groupSiblings : [req],
         );
+        if (!existingConsultation && req.subscription_id) {
+          const { data: directConsult } = await supabaseAdmin
+            .from("patient_consultations")
+            .select(
+              "id, qb_appointment_id, qb_dialog_id, qb_user_id, subscription_id, user_id, started_at, ended_at",
+            )
+            .eq("subscription_id", req.subscription_id)
+            .order("started_at", { ascending: false })
+            .maybeSingle();
+          existingConsultation = directConsult;
+        }
       } catch (lookupError) {
         console.warn("[consultations] group lookup failed:", lookupError);
       }
 
       const reviewerSession = await reviewerQuickbloxSession(role, context.userId, supabaseAdmin);
       const qbConfig = getQuickbloxConfig();
+      const adminQbUserId = qbConfig.providerId ?? 143129220;
 
       // Resolve assigned provider's QuickBlox agent and session
       let targetProviderQbId = reviewerSession.userId;
@@ -1084,58 +1117,29 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
       let consultationStartedAt = existingConsultation?.started_at ?? new Date().toISOString();
       let consultationEndedAt = existingConsultation?.ended_at ?? null;
 
-      // Check if QuickBlox already has an active open appointment for this patient/client
+      // Single source of truth: If a consultation room is already recorded in the database,
+      // use it directly without overwriting it from QuickBlox's open appointment list.
       let apptDetail: QbAppointment | null = null;
-      const openAppt = providerAppts.find(
-        (a) =>
-          (!a.date_end || a.date_end === "") &&
-          (patientQbUserId ? a.client_id === patientQbUserId : true),
-      );
-
-      if (openAppt) {
-        // Use the active open appointment from QuickBlox
-        appointmentId = openAppt._id;
-        qbDialogId = openAppt.dialog_id ?? qbDialogId;
-        patientQbUserId = openAppt.client_id ?? patientQbUserId;
-        apptDetail = openAppt;
-        consultationEndedAt = null;
-
-        // Ensure Supabase is synced with this active appointment
-        if (consultationRecordId) {
-          await supabaseAdmin
-            .from("patient_consultations")
-            .update({
-              qb_appointment_id: openAppt._id,
-              qb_dialog_id: openAppt.dialog_id ?? null,
-              ...(openAppt.client_id ? { qb_user_id: openAppt.client_id } : {}),
-              ended_at: null,
-            })
-            .eq("id", consultationRecordId);
-        } else if (req.user_id && req.subscription_id) {
-          const { data: ins } = await supabaseAdmin
-            .from("patient_consultations")
-            .insert({
-              user_id: req.user_id,
-              subscription_id: req.subscription_id,
-              qb_user_id: openAppt.client_id ?? 0,
-              qb_appointment_id: openAppt._id,
-              qb_dialog_id: openAppt.dialog_id ?? null,
-            })
-            .select("id, started_at")
-            .maybeSingle();
-          if (ins) {
-            consultationRecordId = ins.id;
-            consultationStartedAt = ins.started_at;
-          }
-        }
-      } else if (patientQbUserId) {
-        const latestClientAppt = providerAppts.find((a) => a.client_id === patientQbUserId);
-        if (latestClientAppt) {
-          appointmentId = latestClientAppt._id;
-          qbDialogId = latestClientAppt.dialog_id ?? qbDialogId;
-          apptDetail = latestClientAppt;
-          if (latestClientAppt.date_end) {
-            consultationEndedAt = latestClientAppt.date_end;
+      if (qbDialogId || appointmentId) {
+        const targetId = appointmentId || qbDialogId;
+        apptDetail = providerAppts.find((a) => a._id === targetId || a.dialog_id === targetId) ?? null;
+      } else if (patientQbUserId && patientQbUserId > 0) {
+        // Only if no room is recorded in DB, check if an open appointment exists for this exact client
+        const openAppt = providerAppts.find(
+          (a) => (!a.date_end || a.date_end === "") && a.client_id === patientQbUserId,
+        );
+        if (openAppt) {
+          appointmentId = openAppt._id;
+          qbDialogId = openAppt.dialog_id ?? openAppt._id;
+          apptDetail = openAppt;
+          if (consultationRecordId) {
+            await supabaseAdmin
+              .from("patient_consultations")
+              .update({
+                qb_appointment_id: openAppt._id,
+                qb_dialog_id: openAppt.dialog_id ?? openAppt._id,
+              })
+              .eq("id", consultationRecordId);
           }
         }
       }
@@ -1459,15 +1463,54 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
         Boolean(completedEvent),
       );
 
-      // Ensure the assigned provider and active reviewer session are added to the dialog room
+      // Synchronize dialog room occupants based on consultation lifecycle:
+      // - If consultation is finished: Doctor is removed from occupants; Admin and Patient remain.
+      // - If consultation is active: Patient, Admin, and assigned Doctor are all active occupants.
       if (qbDialogId) {
-        const uids = new Set<number>();
-        if (targetProviderQbId) uids.add(targetProviderQbId);
-        if (session?.userId) uids.add(session.userId);
-        for (const uid of uids) {
-          void addProviderToDialogOccupants({
+        const adminUid = adminQbUserId || session?.userId;
+        if (isConsultationEnded) {
+          // Doctor must be removed from the active room; Admin and Patient remain
+          if (
+            targetProviderQbId &&
+            targetProviderQbId !== adminUid &&
+            targetProviderQbId !== patientQbUserId
+          ) {
+            void removeDialogOccupants({
+              dialogId: qbDialogId,
+              occupantsIds: [targetProviderQbId],
+              token: session?.token,
+            }).catch(() => {});
+          }
+          const remainingOccupants = [adminUid].filter(
+            (id): id is number => typeof id === "number" && id > 0,
+          );
+          if (patientQbUserId && patientQbUserId !== adminUid && patientQbUserId > 0) {
+            remainingOccupants.push(patientQbUserId);
+          }
+          void ensureDialogOccupants({
             dialogId: qbDialogId,
-            qbProviderId: uid,
+            occupantsIds: remainingOccupants,
+          }).catch(() => {});
+        } else {
+          // Consultation is active or doctor assigned: ensure Patient, Admin, and Doctor (if assigned)
+          const activeOccupants = [adminUid].filter(
+            (id): id is number => typeof id === "number" && id > 0,
+          );
+          if (patientQbUserId && patientQbUserId !== adminUid && patientQbUserId > 0) {
+            activeOccupants.push(patientQbUserId);
+          }
+          if (
+            req.provider_id &&
+            targetProviderQbId &&
+            targetProviderQbId !== adminUid &&
+            targetProviderQbId > 0 &&
+            !activeOccupants.includes(targetProviderQbId)
+          ) {
+            activeOccupants.push(targetProviderQbId);
+          }
+          void ensureDialogOccupants({
+            dialogId: qbDialogId,
+            occupantsIds: activeOccupants,
           }).catch(() => {});
         }
       }
@@ -1725,7 +1768,6 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
       const externalUrl = "";
       const embedUrl = "";
 
-      const adminQbUserId = qbConfig.providerId ?? 142814409;
       const userDirectory: Record<
         number,
         { name: string; role: "admin" | "provider" | "patient" }
@@ -1754,9 +1796,51 @@ export const getConsultationRoomDetails = createServerFn({ method: "POST" })
         }
       }
 
+      let consultationStatus:
+        | "Pending"
+        | "Doctor Assigned"
+        | "Consultation Active"
+        | "Consultation Finished" = "Pending";
+      if (isConsultationEnded) {
+        consultationStatus = "Consultation Finished";
+      } else if (req.provider_id) {
+        consultationStatus =
+          consultationStartedAt || qbDialogId ? "Consultation Active" : "Doctor Assigned";
+      } else {
+        consultationStatus = "Pending";
+      }
+
+      const participants: ConsultationRoomData["participants"] = [
+        {
+          id: patientQbUserId,
+          name: fullName,
+          role: "patient",
+          isActive: true,
+          statusLabel: "Active",
+        },
+        {
+          id: adminQbUserId,
+          name: "Admin",
+          role: "admin",
+          isActive: true,
+          statusLabel: "Active",
+        },
+      ];
+      if (req.provider_id) {
+        participants.push({
+          id: targetProviderQbId,
+          name: provRow?.full_name || "Doctor",
+          role: "provider",
+          isActive: !isConsultationEnded,
+          statusLabel: isConsultationEnded ? "Removed (Consultation Finished)" : "Active",
+        });
+      }
+
       return {
         ok: true,
         data: {
+          consultationStatus,
+          participants,
           request: {
             id: req.id,
             status: req.status,
@@ -2045,7 +2129,7 @@ export const finishConsultationAppointment = createServerFn({ method: "POST" })
     if (req.subscription_id || req.user_id) {
       let q = supabaseAdmin
         .from("patient_consultations")
-        .select("id, qb_appointment_id, qb_user_id, qb_dialog_id, started_at, subscription_id")
+        .select("id, qb_appointment_id, qb_user_id, qb_dialog_id, started_at, ended_at, subscription_id")
         .order("started_at", { ascending: false });
       if (req.subscription_id) {
         q = q.eq("subscription_id", req.subscription_id);
@@ -2061,6 +2145,7 @@ export const finishConsultationAppointment = createServerFn({ method: "POST" })
         req.subscription_id ? r.subscription_id === req.subscription_id : true,
       ) || consultationRows[0];
 
+    const alreadyEnded = Boolean(targetConsultRow?.ended_at);
     const patientQbUserId = targetConsultRow?.qb_user_id ?? consultationRows[0]?.qb_user_id ?? null;
     const directApptId = targetConsultRow?.qb_appointment_id ?? null;
     const directDialogId = targetConsultRow?.qb_dialog_id ?? null;
@@ -2107,6 +2192,63 @@ export const finishConsultationAppointment = createServerFn({ method: "POST" })
       } catch (qbErr) {
         console.warn(`[consultations] endQuickbloxAppointment failed for ${apptId}:`, qbErr);
       }
+    }
+
+    // Synchronize dialog occupants: Remove doctor from active room while preserving Admin and Patient
+    const cfg = getQuickbloxConfig();
+    const adminQbId = cfg.providerId ?? 143129220;
+
+    let doctorQbId: number | null = null;
+    if (req.provider_id) {
+      const { data: provData } = await supabaseAdmin
+        .from("providers")
+        .select("qb_user_id")
+        .eq("id", req.provider_id)
+        .maybeSingle();
+      doctorQbId = provData?.qb_user_id ?? null;
+    }
+    if (!doctorQbId && role === "provider" && providerSession?.userId) {
+      doctorQbId = providerSession.userId;
+    }
+
+    const activeDialogId =
+      directDialogId ||
+      targetConsultRow?.qb_dialog_id ||
+      directApptId ||
+      targetConsultRow?.qb_appointment_id;
+
+    if (
+      activeDialogId &&
+      doctorQbId &&
+      doctorQbId !== adminQbId &&
+      doctorQbId !== patientQbUserId
+    ) {
+      try {
+        await removeDialogOccupants({
+          dialogId: activeDialogId,
+          occupantsIds: [doctorQbId],
+          token: providerSession?.token,
+        });
+        const remainingOccupants = [adminQbId];
+        if (patientQbUserId && patientQbUserId !== adminQbId) {
+          remainingOccupants.push(patientQbUserId);
+        }
+        await ensureDialogOccupants({
+          dialogId: activeDialogId,
+          occupantsIds: remainingOccupants,
+        });
+      } catch (remErr) {
+        console.warn("[finishConsultationAppointment] remove doctor occupant error:", remErr);
+      }
+    }
+
+    // Idempotency: if already completed and all appointments closed, avoid duplicate records
+    if (alreadyEnded && appointmentsToEnd.size === 0) {
+      return {
+        ok: true,
+        message: "Consultation is already completed.",
+        pharmacy_error: null,
+      };
     }
 
     const now = new Date().toISOString();

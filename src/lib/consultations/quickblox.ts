@@ -199,7 +199,7 @@ export async function getOwnerProviderAuth(): Promise<QuickbloxProviderSession> 
 
   ownerSessionCache = {
     token: session.token,
-    userId: session.userId ?? cfg.providerId ?? 142814409,
+    userId: session.userId ?? cfg.providerId ?? 143129220,
     expiresAt: now + SESSION_TTL_MS,
   };
   return ownerSessionCache;
@@ -281,7 +281,33 @@ export async function ensureQuickbloxProviderAgent(params: {
       return { userId: userSession.userId, created: false };
     }
   } catch {
-    // User does not exist yet
+    // User does not exist yet or password mismatch
+  }
+
+  // 3b. Check if provider account already exists by email in QuickBlox
+  try {
+    const owner = await getOwnerProviderAuth();
+    const byEmailRes = await fetch(
+      `${cfg.apiUrl}/users/by_email.json?email=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          "QB-Token": owner.token,
+          "QuickBlox-REST-API-Version": "0.1.1",
+        },
+      },
+    );
+    if (byEmailRes.ok) {
+      const byEmailData = (await byEmailRes.json()) as { user?: { id?: number } };
+      if (byEmailData.user?.id) {
+        cacheAgentSession(email, {
+          token: owner.token,
+          userId: byEmailData.user.id,
+        });
+        return { userId: byEmailData.user.id, created: false };
+      }
+    }
+  } catch (lookupErr) {
+    console.warn("[consultations] lookup provider by email notice:", lookupErr);
   }
 
   // 4. Register provider user
@@ -385,11 +411,16 @@ export async function removeDialogOccupants(params: {
   occupantsIds: number[];
   token?: string;
 }): Promise<boolean> {
-  const ids = params.occupantsIds.filter((id) => Number.isFinite(id) && id > 0);
+  const cfg = getQuickbloxConfig();
+  const adminId = cfg.providerId || 143129220;
+  // Safety guard: Admin must never be removed from consultation rooms
+  const ids = params.occupantsIds.filter(
+    (id) => Number.isFinite(id) && id > 0 && id !== adminId,
+  );
   if (!params.dialogId || !ids.length) return false;
 
   const pull = async (token: string) => {
-    const res = await fetch(`https://api.quickblox.com/chat/Dialog/${params.dialogId}.json`, {
+    const res = await fetch(`${cfg.apiUrl}/chat/Dialog/${params.dialogId}.json`, {
       method: "PUT",
       headers: {
         "QB-Token": token,
@@ -534,7 +565,7 @@ export async function listProviderAppointments(token?: string): Promise<QbAppoin
     });
     if (res.ok) {
       const json = (await res.json()) as { items?: any[] };
-      const providerId = cfg.providerId || 142814409;
+      const providerId = cfg.providerId || 143129220;
       return (json.items ?? []).map((d) => ({
         _id: d._id,
         dialog_id: d._id,
@@ -577,7 +608,7 @@ export async function getAppointmentById(appointmentId: string, token?: string):
       });
       if (res.ok) {
         const dialog = (await res.json()) as any;
-        const providerId = cfg.providerId || 142814409;
+        const providerId = cfg.providerId || 143129220;
         const clientId =
           dialog.occupants_ids?.find((id: number) => id !== providerId) || dialog.user_id;
         return {
@@ -604,7 +635,7 @@ export async function getAppointmentById(appointmentId: string, token?: string):
     _id: appointmentId,
     dialog_id: appointmentId,
     client_id: undefined,
-    provider_id: cfg.providerId ?? 142814409,
+    provider_id: cfg.providerId ?? 143129220,
     description: "Medical Consultation",
     date_end: null,
   };
@@ -693,6 +724,10 @@ export async function createPatientAppointment(params: {
   if (params.providerId && !occupants.includes(params.providerId)) {
     occupants.push(params.providerId);
   }
+  const adminId = cfg.providerId || 143129220;
+  if (adminId && !occupants.includes(adminId)) {
+    occupants.push(adminId);
+  }
 
   const res = await fetch(`${cfg.apiUrl}/chat/Dialog.json`, {
     method: "POST",
@@ -732,7 +767,7 @@ export async function createPatientAppointment(params: {
 
 export async function fetchQuickbloxUserName(userId: number): Promise<string | null> {
   if (!userId || userId <= 0) return null;
-  if (userId === 142814409) return "Admin";
+  if (userId === 143129220 || userId === 142814409) return "Admin";
 
   const cfg = getQuickbloxConfig();
   try {
